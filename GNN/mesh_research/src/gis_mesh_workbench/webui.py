@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import secrets
+import sys
 import threading
 from urllib.parse import urlsplit, parse_qs
 import uuid
@@ -13,9 +14,11 @@ import rasterio
 from .runner import effective_config, preflight, run, write_json
 from .spatial import metric_crs
 from .adapters import _json
+from .onboarding import sample_directory, tutorial_seen, acknowledge
 
 ASSETS=Path(__file__).with_name('webui')
-WORKSPACE=Path(__file__).resolve().parents[4]
+WORKSPACE=(Path(sys.executable).resolve().parent/'workspace'
+           if getattr(sys, 'frozen', False) else Path(__file__).resolve().parents[4])
 ARTIFACTS={'manifest':'manifest.json','qa':'qa.json','cells':'cells.json',
            'attributes':'attributes.json','csv':'attributes.csv','preview':'preview.png'}
 
@@ -25,28 +28,34 @@ class AccessError(ValueError): pass
 
 class WorkbenchServer(ThreadingHTTPServer):
     daemon_threads=True
-    def __init__(self,workspace=WORKSPACE,port=0,allow_roots=()):
+    def __init__(self,workspace=WORKSPACE,port=0,allow_roots=(),tutorial_preferences=None):
         self.workspace=Path(workspace).resolve(strict=True)
-        self.roots=tuple(dict.fromkeys([self.workspace]+[Path(p).resolve(strict=True) for p in allow_roots]))
+        self.sample_root=sample_directory()
+        self.tutorial_preferences=tutorial_preferences
+        self.output_roots=tuple(dict.fromkeys([self.workspace]+[Path(p).resolve(strict=True) for p in allow_roots]))
+        self.roots=tuple(dict.fromkeys([*self.output_roots,self.sample_root]))
         if any(not p.is_dir() for p in self.roots): raise ValueError('allowed roots must be directories')
         self.token=secrets.token_urlsafe(32)
-        self.session_dir=self.permitted(self.workspace/'.scratch/gis-mesh-workbench/ui-sessions'/uuid.uuid4().hex,exists=False)
+        self.session_dir=self.permitted(self.workspace/'.scratch/gis-mesh-workbench/ui-sessions'/uuid.uuid4().hex,exists=False,write=True)
         self.session_dir.mkdir(parents=True,exist_ok=False)
-        self.output_root=self.permitted(self.workspace/'.scratch/gis-mesh-workbench/ui-runs',exists=False)
+        self.output_root=self.permitted(self.workspace/'.scratch/gis-mesh-workbench/ui-runs',exists=False,write=True)
         self.output_root.mkdir(parents=True,exist_ok=True)
         self.lock=threading.RLock(); self.validated={}; self.jobs={}; self.current_preflight=None
         super().__init__(('127.0.0.1',port),Handler)
         self.host=f'127.0.0.1:{self.server_port}'; self.origin='http://'+self.host
 
-    def permitted(self,path,*,exists=True):
+    def permitted(self,path,*,exists=True,write=False):
         path=Path(path)
         if not path.is_absolute(): path=self.workspace/path
         resolved=path.resolve(strict=False)
-        if not any(resolved==root or root in resolved.parents for root in self.roots):
+        roots=self.output_roots if write else self.roots
+        if write and (resolved==self.sample_root or self.sample_root in resolved.parents):
+            raise AccessError('Dữ liệu mẫu chỉ được đọc, không được ghi kết quả tại đây')
+        if not any(resolved==root or root in resolved.parents for root in roots):
             raise AccessError('Path nằm ngoài thư mục được cho phép')
         if exists:
             resolved=resolved.resolve(strict=True)
-            if not any(resolved==root or root in resolved.parents for root in self.roots):
+            if not any(resolved==root or root in resolved.parents for root in roots):
                 raise AccessError('Resolved path escaped allowed roots')
         return resolved
 
@@ -57,7 +66,7 @@ class WorkbenchServer(ThreadingHTTPServer):
         raster=self.permitted(config['raster_path'])
         if raster.suffix.lower() not in {'.tif','.tiff'} or not raster.is_file(): raise ValueError('GeoTIFF required')
         config['raster_path']=str(raster)
-        output=self.permitted(config['output_root'])
+        output=self.permitted(config['output_root'],write=True)
         if not output.is_dir(): raise ValueError('output root must be an existing directory')
         config['output_root']=str(output)
         source=config.get('cell_source',{})
@@ -158,14 +167,21 @@ class Handler(BaseHTTPRequestHandler):
         try:
             parsed=urlsplit(self.path); path=parsed.path
             self.guard(api=path.startswith('/api/'))
-            if path in {'/','/app.js','/style.css','/icon.png','/favicon.ico'}:
+            fonts = {f'/fonts/BeVietnamPro-{weight}.ttf': f'BeVietnamPro-{weight}.ttf'
+                     for weight in ('Regular', 'Medium', 'SemiBold', 'Bold')}
+            if path in fonts:
+                return self.respond((ASSETS/'fonts'/fonts[path]).read_bytes(), content_type='font/ttf')
+            if path in {'/','/app.js','/style.css','/wizard.css','/icon.png','/favicon.ico'}:
                 name={'/':'index.html','/icon.png':'meshcherry-icon-v1.png',
                       '/favicon.ico':'meshcherry-icon-v1.ico'}.get(path,path[1:])
-                mime={'index.html':'text/html','app.js':'text/javascript','style.css':'text/css',
+                mime={'index.html':'text/html','app.js':'text/javascript','style.css':'text/css','wizard.css':'text/css',
                       'meshcherry-icon-v1.png':'image/png','meshcherry-icon-v1.ico':'image/vnd.microsoft.icon'}[name]
                 return self.respond((ASSETS/name).read_bytes(),content_type=mime)
             if path=='/api/bootstrap':
-                return self.respond(dict(roots=[str(p) for p in self.server.roots],output_root=str(self.server.output_root)))
+                return self.respond(dict(roots=[str(p) for p in self.server.roots],output_roots=[str(p) for p in self.server.output_roots],output_root=str(self.server.output_root),
+                    tutorial_seen=tutorial_seen(self.server.tutorial_preferences),
+                    sample_raster=str(self.server.sample_root/'sample_10_30.tif'),
+                    sample_mesh=str(self.server.sample_root/'two_triangles.json')))
             query=parse_qs(parsed.query)
             if path=='/api/job': return self.respond(self.server.job(query.get('id',[''])[0]))
             if path=='/api/artifact':
@@ -188,6 +204,10 @@ class Handler(BaseHTTPRequestHandler):
             if not 0<count<=65536: return self.respond(dict(error='Request body size limit'),413)
             raw=self.rfile.read(count); self.body_consumed=True
             data=json.loads(raw,parse_constant=lambda value: (_ for _ in ()).throw(ValueError('nonfinite JSON')))
+            if path=='/api/tutorial':
+                if data != {'action':'acknowledge'}: raise ValueError('unsupported tutorial action')
+                acknowledge(self.server.tutorial_preferences)
+                return self.respond(dict(ok=True))
             if path=='/api/fs/list':
                 directory=self.server.permitted(data['path'])
                 if not directory.is_dir(): raise ValueError('Directory required')

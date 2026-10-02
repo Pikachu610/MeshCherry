@@ -1,5 +1,28 @@
 # Mesh Cherry — GIS mesh workbench v1
 
+## Desktop và hướng dẫn cho người mới — đang nghiệm thu
+
+`gis-mesh-workbench desktop` mở một cửa sổ MeshCherry riêng qua pywebview,
+không mở trình duyệt mặc định. Cài extra `pip install -e ".[desktop]"` từ
+thư mục package. Windows cần WebView2 Runtime; trên máy phát triển đã phát
+hiện runtime, nhưng chưa có nghiệm thu clean-machine. Tài liệu dependency:
+https://github.com/r0x0r/pywebview/blob/master/docs/guide/installation.md
+
+`gis-mesh-workbench ui` vẫn là chế độ browser/debug. Hai chế độ dùng cùng
+server và backend có kiểm tra token, Host/Origin và giới hạn đường dẫn.
+Không có privileged JS API. Desktop không tự mở browser khi thiếu dependency.
+Trong lúc có job chạy, đóng cửa sổ bị chặn; chờ run xong để đóng an toàn.
+
+Giao diện mới chia thành bốn bước: dữ liệu, lưới, kiểm tra, kết quả. Welcome
+hướng dẫn mẫu hai pixel 10/30; người dùng tự kiểm tra/chạy và bấm cả hai tâm
+ô trước khi kết thúc. Có thể bỏ qua hoặc mở lại bằng Hướng dẫn cơ bản.
+Chỉ lưu `tutorial_version_seen` trong `%LOCALAPPDATA%/MeshCherry/tutorial.json`;
+không lưu token, dữ liệu hay đường dẫn raster vào preference. Browser/debug
+không ghi preference này mặc định và hiển thị welcome mỗi phiên mới.
+
+Chưa có EXE/installer. Desktop source launcher không chứng minh rằng một bản
+EXE độc lập đã hoạt động. Các phép tính extraction, CRS và giới hạn v1 giữ nguyên.
+
 Ứng dụng cục bộ có giao diện đỏ/trắng để tạo structured grid, nhập mesh tam
 giác đã có, chạy một preset Gmsh tham chiếu và trích thuộc tính cho **ô đã có
 hình học**. Không phải công cụ chia thích nghi DEM/polygon GIS tổng quát.

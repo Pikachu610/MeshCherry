@@ -52,6 +52,66 @@ class WebUITests(unittest.TestCase):
         self.assertEqual(status,200,data); self.assertEqual(data['report']['status'],'pass',data)
         return data['preflight_id']
 
+    def test_local_font_routes_are_allowlisted(self):
+        from gis_mesh_workbench.webui import ASSETS
+        for weight in ('Regular', 'Medium', 'SemiBold', 'Bold'):
+            name = f'BeVietnamPro-{weight}.ttf'
+            status, body, headers = self.request('/fonts/'+name)
+            self.assertEqual(status, 200)
+            self.assertEqual(headers['Content-Type'], 'font/ttf')
+            self.assertEqual(body, (ASSETS/'fonts'/name).read_bytes())
+            self.assertEqual(body[:4], b'\x00\x01\x00\x00')
+        self.assertEqual(self.request('/fonts/unknown.ttf')[0], 404)
+        self.assertEqual(self.request('/fonts/../app.js')[0], 404)
+        self.assertIn('SIL OPEN FONT LICENSE', (ASSETS/'fonts'/'OFL.txt').read_text())
+
+    def test_truthful_cute_ui_contract(self):
+        from gis_mesh_workbench.webui import ASSETS
+        html = (ASSETS/'index.html').read_text(encoding='utf-8')
+        script = (ASSETS/'app.js').read_text(encoding='utf-8')
+        css = (ASSETS/'wizard.css').read_text(encoding='utf-8')
+        for label in ('Chọn GeoTIFF trên máy', 'Hai pixel nhân tạo', 'Gmsh reference demo'):
+            self.assertIn(label, html)
+        for unsupported in ('Kéo thả', 'khoảng 2 phút', 'Map vệ tinh', 'Phủ hoàn hảo'):
+            self.assertNotIn(unsupported, html)
+        for ident in ('welcome-start', 'welcome-skip', 'mode', 'raster', 'validate', 'run', 'csv', 'json', 'map'):
+            self.assertEqual(html.count('id="'+ident+'"'), 1)
+        self.assertEqual(html.count('data-mode='), 3)
+        self.assertIn('Nhập CRS tính toán không sửa được lỗi này', script)
+        self.assertIn('if(!source.crs){stage(1);', script)
+        self.assertIn('null không có nghĩa là 0', script)
+        self.assertIn('prefers-reduced-motion', css)
+        self.assertIn('direction:ltr', css)
+        self.assertNotIn('transition:all', css)
+        self.assertNotIn('Bé', html)
+
+    def test_samples_readable_but_never_output_destinations(self):
+        sample = self.server.sample_root
+        self.assertEqual(self.request('/api/fs/list', {'path': str(sample)})[0], 200)
+        self.assertEqual(self.request('/api/source', {'path': str(sample/'sample_10_30.tif')})[0], 200)
+        self.assertEqual(self.server.permitted(sample/'two_triangles.json'), sample/'two_triangles.json')
+        for target in (sample, sample/'new-output'):
+            config = dict(self.config, output_root=str(target))
+            self.assertEqual(self.request('/api/preflight', config)[0], 403)
+        self.assertEqual(self.server.normalize_form(self.config)['output_root'], str(self.server.output_root))
+        status, data, _ = self.request('/api/bootstrap')
+        self.assertEqual(status, 200)
+        self.assertNotIn(str(sample), data['output_roots'])
+
+    def test_explicit_output_root_still_allowed_and_nested_samples_protected(self):
+        extra = self.base/'extra'; extra.mkdir()
+        server = WorkbenchServer(self.root, allow_roots=[extra])
+        try:
+            self.assertEqual(server.permitted(extra, write=True), extra)
+            # Simulate packaged samples nested within a writable workspace.
+            nested = self.root/'packaged-samples'; nested.mkdir()
+            server.sample_root = nested
+            for target in (nested, nested/'output'):
+                with self.assertRaisesRegex(ValueError, 'chỉ được đọc'):
+                    server.permitted(target, exists=False, write=True)
+        finally:
+            server.server_close()
+
     def wait_job(self,ident):
         deadline=time.monotonic()+10
         while time.monotonic()<deadline:
@@ -113,6 +173,18 @@ class WebUITests(unittest.TestCase):
         self.assertIn(b'href="/favicon.ico"', html)
         self.assertIn(b'src="/icon.png"', html)
         self.assertEqual(self.request('/branding/meshcherry-icon-master-v1.png')[0], 404)
+
+    def test_tutorial_state_is_version_only_and_authenticated(self):
+        self.server.tutorial_preferences=self.root/'tutorial-preferences.json'
+        status,boot,_=self.request('/api/bootstrap')
+        self.assertEqual(status,200); self.assertFalse(boot['tutorial_seen'])
+        self.assertTrue(Path(boot['sample_raster']).is_file())
+        self.assertEqual(self.request('/api/tutorial',{'action':'acknowledge'},headers={'X-Workbench-Token':'wrong'})[0],403)
+        self.assertEqual(self.request('/api/tutorial',{'action':'acknowledge','path':'outside'})[0],400)
+        self.assertEqual(self.request('/api/tutorial',{'action':'acknowledge'})[0],200)
+        self.assertTrue(self.request('/api/bootstrap')[1]['tutorial_seen'])
+        self.assertEqual(json.loads(self.server.tutorial_preferences.read_text()),{'tutorial_version_seen':1})
+        self.assertEqual(self.request('/wizard.css')[0],200)
 
     def test_symlink_escape_where_supported(self):
         link=self.root/'escape'

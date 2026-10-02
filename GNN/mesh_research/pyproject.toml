@@ -16,6 +16,9 @@ dependencies = [
   "jsonschema>=4.23,<5"
 ]
 
+[project.optional-dependencies]
+desktop = ["pywebview>=6,<7"]
+
 [project.scripts]
 mesh-research = "mesh_research.__main__:main"
 gis-mesh-workbench = "gis_mesh_workbench.cli:main"
@@ -27,5 +30,5 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-gis_mesh_workbench = ["*.json", "webui/*.html", "webui/*.js", "webui/*.css", "webui/*.png", "webui/*.ico"]
+gis_mesh_workbench = ["*.json", "webui/*.html", "webui/*.js", "webui/*.css", "webui/*.png", "webui/*.ico", "webui/fonts/*.ttf", "webui/fonts/OFL.txt", "sample_data/*.tif", "sample_data/*.json"]
 

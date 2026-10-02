@@ -15,6 +15,13 @@ from gis_mesh_workbench.gmsh_reference import PRESET, PRESET_PATH, inspect_prese
 
 
 class GmshReferenceTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        config = json.loads(PRESET_PATH.read_text(encoding='utf-8'))
+        executable = (PRESET_PATH.parent.parent / config['generator']['executable']).resolve()
+        if not executable.is_file():
+            raise unittest.SkipTest('External Gmsh dependency is not distributed; install it to run integration tests')
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name); self.path = self.root/'config.json'

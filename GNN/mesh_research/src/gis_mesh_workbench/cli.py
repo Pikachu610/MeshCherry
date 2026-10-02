@@ -5,6 +5,9 @@ from .runner import run
 
 
 def main():
+    if len(sys.argv)>1 and sys.argv[1]=='desktop':
+        from .desktop import main as desktop_main
+        return desktop_main(sys.argv[2:])
     if len(sys.argv)>1 and sys.argv[1]=='ui':
         from .webui import main as ui_main
         return ui_main(sys.argv[2:])

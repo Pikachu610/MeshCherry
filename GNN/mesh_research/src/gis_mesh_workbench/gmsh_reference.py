@@ -16,6 +16,8 @@ PRESET_PATH = Path(__file__).resolve().parents[2] / 'configs/gmsh-inclined-plane
 
 
 def inspect_preset(analysis_crs, preset=PRESET):
+    if getattr(sys, 'frozen', False):
+        raise ValueError('Gmsh demo không có trong EXE v2. Dùng bản source với Gmsh cài ngoài; không có fallback âm thầm.')
     if preset != PRESET:
         raise ValueError('unsupported Gmsh reference preset')
     source = PRESET_PATH.resolve()

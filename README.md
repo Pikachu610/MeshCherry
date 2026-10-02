@@ -1,48 +1,50 @@
-# MeshCherry v1
+# MeshCherry v2 — Windows desktop
 
-Ứng dụng GIS cục bộ với giao diện đỏ/trắng: tạo lưới vuông/chữ nhật, nhập mesh tam giác, trích thuộc tính raster theo diện tích giao và xem từng tâm ô.
+Ứng dụng GIS chạy cục bộ trong cửa sổ riêng, giao diện đỏ–trắng, font Be Vietnam Pro offline và hướng dẫn từng bước. Không cần Python để chạy bản portable.
 
-![MeshCherry](branding/MeshCherry.png)
+## Tải và chạy
 
-## Phạm vi bản v1
+Tải `MeshCherry-v2.0.0-windows-x64.zip` trong [Releases](https://github.com/Pikachu610/MeshCherry/releases/tag/v2.0.0), giải nén toàn bộ rồi mở **MeshCherry.exe**. Không tách EXE khỏi thư mục `_internal`.
 
-- Structured grid: extent và kích thước ô theo hệ tọa độ projected metre; strict/clip cho ô biên.
-- Nhập mesh-artifact-v0 JSON (XY hoặc XYZ; tính hình học phẳng bằng XY).
-- Intensive: trung bình diện tích; extensive: phân bổ tổng/pixel; categorical: tỷ lệ lớp.
-- Coverage, NoData, kiểm tra nguồn, CSV/JSON và hồ sơ run.
-- Một preset Gmsh tham chiếu cố định, cần Gmsh 4.15.2 cài ngoài.
+Yêu cầu: Windows x64, .NET Framework và Microsoft Edge WebView2 Evergreen Runtime. Gói chưa ký số; không tắt bảo vệ Windows để chạy. Giải nén ở thư mục có quyền ghi. Không cài Gmsh binary trong gói này.
 
-Đây là **source release**, không phải EXE hay installer. Giới hạn 1.000 cell/run. Chưa có UI tạo mesh thích nghi DEM cho polygon bất kỳ. Chấm đỏ là tâm cell, không tự chứng minh graph/routing/GNN hợp lệ. Phần mesh research đi kèm là backend nghiên cứu độc lập với Phase 1; config ROI4/SF-1 cần dữ liệu ngoài repo.
+## Dữ liệu và thao tác cơ bản
 
-## Cài và chạy trên Windows
+1. Chọn **Bắt đầu với mẫu**. Mẫu nhân tạo hai pixel 10/30 đã tích hợp.
+2. Giữ lưới 1 × 1 m, kiểm tra cấu hình rồi chạy.
+3. Bấm hai tâm ô: giá trị tương ứng 10 và 30, coverage 100%.
+4. Tải CSV/JSON hoặc sao chép đường dẫn hồ sơ.
 
-Cần Python >= 3.10. Trong PowerShell tại thư mục repo:
+Để dùng dữ liệu riêng, chép GeoTIFF và mesh JSON vào `workspace/` cạnh EXE. Có thể chọn thư mục riêng bằng:
+`MeshCherry.exe --workspace D:\\MyMeshData`.
+Ứng dụng chỉ đọc trong thư mục được cho phép. Kết quả lưu trong `workspace/.scratch/gis-mesh-workbench/ui-runs/`. Không ghi đè raster nguồn; dữ liệu mẫu tích hợp chỉ đọc.
+
+## Phạm vi v2
+
+- Lưới vuông/chữ nhật trong projected CRS có đơn vị mét; strict/clip cho ô biên.
+- Nhập mesh-artifact-v0 JSON XY/XYZ; tính diện tích theo XY.
+- Trích intensive theo trung bình diện tích, extensive theo phân bổ bảo toàn, categorical theo tỷ lệ lớp.
+- Hiển thị cell, tâm ô, coverage, NoData, min/max/std và hồ sơ CSV/JSON.
+- Cửa sổ desktop WebView2; server chỉ trên loopback, có Host/Origin/token guard và không có JS/Python bridge mới.
+- Font tiếng Việt offline; bo góc nhất quán; tutorial và metadata dễ đọc hơn v1.
+- Tối đa 1.000 cell/run và các giới hạn workload hiện có.
+
+EXE **không** tạo mesh thích nghi từ DEM/polygon bất kỳ; không có basemap hay drag/drop. Gmsh demo chỉ chạy ở bản source khi cài Gmsh 4.15.2 bên ngoài; EXE báo thiếu chức năng rõ ràng, không tự đổi thuật toán. Chấm đỏ là tâm cell, không tự chứng minh graph/routing/GNN hợp lệ. Coverage 100% không phải độ chính xác thủy văn. Mesh research vẫn độc lập với Phase 1.
+
+## Chạy từ source / build EXE
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e .\GNN\mesh_research
+.\.venv\Scripts\python.exe -m pip install -e ".\GNN\mesh_research[desktop]"
 .\.venv\Scripts\python.exe .\launch_meshcherry.py
 ```
 
-Launcher mở trình duyệt qua URL localhost có token phiên. Giữ cửa sổ dòng lệnh đang chạy; Ctrl+C để dừng. Không đưa token lên Git hoặc chia sẻ URL có token. Dữ liệu được chọn trong phạm vi repo; kết quả ở `results/` và bị Git bỏ qua.
+Xem [hướng dẫn build](GNN/mesh_research/packaging/README.md) và requirements-v2.lock.txt. Build phát hành dùng Python 3.12.14, pywebview 6.2.1 và PyInstaller 6.22.3.
 
-## Dữ liệu thử đi kèm
+## Kiểm chứng và giới hạn
 
-Không kèm DEM cá nhân, kết quả nghiên cứu, môi trường Python hay Gmsh binary.
+Bản SecondPro: 97 test được tìm thấy, 96 đạt, 1 skip quyền symlink trên Windows. Frozen EXE tự kiểm tra tài nguyên, CLR, ô vuông 10/30 và tam giác 25/15. Cửa sổ native khởi chạy và phản hồi trên máy build; đây không phải chứng nhận trên máy sạch hay toàn bộ tương tác native. Gói portable chưa ký số.
 
-1. Chọn `sample-data/sample_10_30.tif`, đọc nguồn, dùng CRS và bounds nguồn. Lưới chữ nhật 1 × 1 m, Intensive: 2 ô, giá trị 10 và 30, coverage 100%.
-2. Giữ raster trên, nhập `sample-data/two_triangles.json`: 2 tam giác, giá trị 25 và 15. Trọng số là diện tích giao, không lấy mẫu tại tâm.
-3. Preset Gmsh: raster `sample-data/gmsh_constant17.tif`, EPSG:32649, Gmsh reference. Trên môi trường tham chiếu đã có 40 tam giác, giá trị 17. Để chạy, đặt Gmsh 4.15.2 tại `Test_chialuoi/gmsh-4.15.2-Windows64/gmsh.exe` theo config. Binary không được đóng gói trong repo.
+Bản v1 được giữ trong lịch sử Git. Binary phân phối qua Release asset, không commit thư viện/binary hay dữ liệu cá nhân vào source Git.
 
-## Kiểm tra
-
-```powershell
-$env:PYTHONPATH = "$PWD\GNN\mesh_research\src"
-.\.venv\Scripts\python.exe -m unittest discover -s GNN/mesh_research/tests -p 'test_workbench*.py' -v
-```
-
-Nhóm Gmsh có test thực thi thật và cần dependency nói trên. Test ROI4/SF-1 cần dữ liệu nghiên cứu ngoài repo; không coi thiếu dữ liệu là đã kiểm chứng. Bản làm việc SecondPro trước khi xuất source: 85 test workbench passed, 1 Windows symlink permission skip (bao gồm thay đổi icon). Clone mới cần kiểm tra lại theo môi trường của người dùng.
-
-Kiểm tra bản source xuất ngày 02/10/2026 (không Gmsh): 44 test, 42 pass và 2 skip. Hai config workbench demo đã đổi đường dẫn để dùng `sample-data/` đi kèm và ghi ra `results/`.
-
-Source được giữ theo cấu trúc `GNN/mesh_research` để giữ chính sách đường dẫn của backend. Không thay đổi thuật toán khi xuất bản v1.
+Tests tích hợp Gmsh được đánh dấu skip nếu executable cài ngoài chưa có, không được tính là đã kiểm chứng Gmsh trong EXE.
