@@ -1,0 +1,20 @@
+{
+  "schema_version": "synthetic-raster-v0",
+  "name": "rainfall",
+  "quantity_type": "intensive",
+  "units": "mm",
+  "grid": {
+    "x_min": 0.0,
+    "y_min": 0.0,
+    "cell_width": 250.0,
+    "cell_height": 250.0,
+    "row_order": "bottom_to_top",
+    "values": [
+      [10.0, 12.0, 14.0, 16.0],
+      [20.0, 22.0, null, 26.0],
+      [30.0, 32.0, 34.0, 36.0],
+      [40.0, 42.0, 44.0, 46.0]
+    ],
+    "nodata": null
+  }
+}

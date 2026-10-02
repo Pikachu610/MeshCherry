@@ -1,0 +1,20 @@
+{
+  "schema_version": "synthetic-raster-v0",
+  "name": "land-cover",
+  "quantity_type": "categorical",
+  "units": "class",
+  "grid": {
+    "x_min": 0.0,
+    "y_min": 0.0,
+    "cell_width": 250.0,
+    "cell_height": 250.0,
+    "row_order": "bottom_to_top",
+    "values": [
+      ["forest", "forest", "urban", "urban"],
+      ["forest", "cropland", "urban", "urban"],
+      ["water", "cropland", "cropland", "urban"],
+      ["water", "water", "cropland", "forest"]
+    ],
+    "nodata": null
+  }
+}

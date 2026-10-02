@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mesh-research"
+version = "0.1.0"
+description = "Reproducible unstructured-mesh research pipeline for the GNN track"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=2.0,<3",
+  "scipy>=1.13,<2",
+  "rasterio>=1.4,<2",
+  "shapely>=2.0,<3",
+  "matplotlib>=3.9,<4",
+  "jsonschema>=4.23,<5"
+]
+
+[project.scripts]
+mesh-research = "mesh_research.__main__:main"
+gis-mesh-workbench = "gis_mesh_workbench.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+gis_mesh_workbench = ["*.json", "webui/*.html", "webui/*.js", "webui/*.css", "webui/*.png", "webui/*.ico"]
+

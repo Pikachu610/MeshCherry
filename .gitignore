@@ -1,0 +1,15 @@
+.venv*/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+.scratch/
+results/
+GNN/mesh_runs/
+DATA/
+Test_chialuoi/
+*.log
+.vscode/
+.idea/
+.env*
+dist/
+build/

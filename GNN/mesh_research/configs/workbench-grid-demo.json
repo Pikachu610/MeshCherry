@@ -1,0 +1,9 @@
+{
+  "schema_version": "gis-workbench-run-config-v0",
+  "run_name": "synthetic-grid-demo", "analysis_crs": "EPSG:32649",
+  "raster_path": "../../../sample-data/sample_10_30.tif",
+  "band": 1, "semantics": "extensive", "value_units": "synthetic-pixel-total",
+  "output_root": "../../../results",
+  "cell_source": {"kind": "structured_grid", "extent": [500000,1000000,500002,1000001],
+    "cell_width_m": 1, "cell_height_m": 1, "boundary_policy": "strict"}
+}

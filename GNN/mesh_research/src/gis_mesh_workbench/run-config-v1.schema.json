@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "extraction_engine", "run_name", "analysis_crs", "raster_path", "band", "semantics", "value_units", "cell_source", "output_root"],
+  "properties": {
+    "schema_version": {"const": "gis-workbench-run-config-v1"},
+    "extraction_engine": {"const": "indexed_windowed_v1"},
+    "run_name": {"type": "string", "minLength": 1},
+    "analysis_crs": {"type": "string", "minLength": 1},
+    "raster_path": {"type": "string", "minLength": 1},
+    "output_root": {"type": "string", "minLength": 1},
+    "band": {"type": "integer", "minimum": 1},
+    "semantics": {"enum": ["intensive", "extensive", "categorical"]},
+    "value_units": {"type": "string", "minLength": 1},
+    "edge_subdivisions": {"type": "integer", "minimum": 1, "maximum": 64},
+    "indexed_limits": {"type": "object", "additionalProperties": false, "properties": {
+      "max_source_pixels": {"type": "integer", "minimum": 1, "maximum": 10000000},
+      "max_pixels_read": {"type": "integer", "minimum": 1, "maximum": 2000000},
+      "max_candidate_pairs": {"type": "integer", "minimum": 1, "maximum": 5000000},
+      "max_window_pixels": {"type": "integer", "minimum": 1, "maximum": 65536}}},
+    "cell_source": {"oneOf": [
+      {"type": "object", "additionalProperties": false, "required": ["kind", "preset"], "properties": {
+        "kind": {"const": "gmsh_reference"}, "preset": {"const": "inclined_plane_250m_v0"},
+        "max_cells": {"type": "integer", "minimum": 1, "maximum": 1000}}},
+      {"type": "object", "additionalProperties": false, "required": ["kind", "path"], "properties": {
+        "kind": {"const": "mesh_artifact"}, "path": {"type": "string", "minLength": 1},
+        "max_cells": {"type": "integer", "minimum": 1, "maximum": 1000}}},
+      {"type": "object", "additionalProperties": false, "required": ["kind", "extent", "cell_width_m", "cell_height_m", "boundary_policy"], "properties": {
+        "kind": {"const": "structured_grid"},
+        "extent": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"type": "number"}},
+        "cell_width_m": {"type": "number", "exclusiveMinimum": 0},
+        "cell_height_m": {"type": "number", "exclusiveMinimum": 0},
+        "boundary_policy": {"enum": ["strict", "clip"]},
+        "max_cells": {"type": "integer", "minimum": 1, "maximum": 1000}}}
+    ]}
+  }
+}

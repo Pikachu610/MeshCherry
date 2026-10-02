@@ -1,0 +1,38 @@
+{
+  "schema_version": "mesh-run-config-v0",
+  "run_name": "gmsh-semantic-remapping",
+  "generator": {
+    "name": "gmsh",
+    "version": "auto",
+    "executable": "../../Test_chialuoi/gmsh-4.15.2-Windows64/gmsh.exe",
+    "parameters": {
+      "target_edge": 250.0,
+      "algorithm": 5,
+      "random_seed": 1
+    }
+  },
+  "domain": {
+    "name": "inclined-plane",
+    "kind": "synthetic_inclined_plane",
+    "width": 1000.0,
+    "height": 1000.0,
+    "base_elevation": 100.0,
+    "slope_x": 0.01,
+    "slope_y": 0.005
+  },
+  "crs": "EPSG:32649",
+  "coordinate_units": "m",
+  "state_units": {
+    "volume": "m3",
+    "depth": "m"
+  },
+  "remapping": {
+    "datasets": [
+      {"path": "../fixtures/rasters/rainfall.json"},
+      {"path": "../fixtures/rasters/water-volume.json"},
+      {"path": "../fixtures/rasters/land-cover.json"}
+    ],
+    "conservation_tolerance": 1e-9
+  },
+  "output_root": "../mesh_runs"
+}

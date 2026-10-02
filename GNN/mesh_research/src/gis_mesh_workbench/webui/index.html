@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mesh Cherry · GIS Workbench</title><link rel="icon" href="/favicon.ico" sizes="any"><link rel="icon" type="image/png" href="/icon.png" sizes="512x512"><link rel="apple-touch-icon" href="/icon.png"><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<body>
+<header><a class="brand" href="#" aria-label="Mesh Cherry"><img src="/icon.png" width="46" height="46" alt=""><span>mesh<span class="red">cherry</span><small>GIS MESH WORKBENCH</small></span></a><span class="pill">LOCAL ONLY <span class="dot"></span></span></header>
+<main>
+<section class="hero"><div><p class="eyebrow">A LITTLE MESH. A LOT OF CLARITY.</p><h1>Từ bản đồ, đến từng ô lưới.</h1><p>Chia lưới, trích thuộc tính raster và kiểm tra từng cell — rõ dữ liệu, rõ hệ tọa độ.</p></div><span class="version">v1 <span>bounded GIS preview</span></span></section>
+<nav class="workflow" aria-label="Quy trình"><span><b>01</b> Nguồn</span><span><b>02</b> Lưới</span><span><b>03</b> Kiểm tra</span><span><b>04</b> Kết quả</span></nav>
+<div class="workspace">
+<aside>
+<form id="form">
+<section class="card"><h2><span class="step">01</span> Nguồn raster</h2>
+<label for="raster">GeoTIFF nguồn</label><div class="input-action"><input id="raster" placeholder="Chọn file .tif trong dự án"><button type="button" data-pick="raster" aria-label="Chọn GeoTIFF">Chọn…</button></div>
+<div class="input-action"><button type="button" id="inspect-source">Đọc thông tin nguồn</button><button type="button" id="use-crs" disabled>Dùng CRS nguồn</button></div>
+<div id="source-info" class="info muted">Chưa có nguồn. File chỉ được đọc tại máy của bạn.</div>
+<div class="two"><div><label for="band">Band</label><input id="band" type="number" value="1" min="1"></div><div><label for="crs">CRS tính toán</label><input id="crs" value="EPSG:32649"></div></div>
+<div class="two"><div><label for="semantics">Loại thuộc tính</label><select id="semantics"><option value="intensive">Intensive · trung bình</option><option value="extensive">Extensive · tổng/pixel</option><option value="categorical">Categorical · tỷ lệ lớp</option></select></div><div><label for="units">Đơn vị giá trị</label><input id="units" value="m" placeholder="Khai báo đúng nguồn"></div></div>
+<p class="tiny">CRS ngang không xác nhận datum/đơn vị cao độ. Không tự đổi nhãn CRS.</p>
+</section>
+<section class="card"><h2><span class="step">02</span> Kiểu lưới</h2>
+<label for="mode">Nguồn cell</label><select id="mode"><option value="structured_grid">Lưới vuông / chữ nhật</option><option value="mesh_artifact">Nhập mesh tam giác đã có</option><option value="gmsh_reference">Gmsh · preset tham chiếu</option></select>
+<div id="grid-options"><div class="section-label">Extent · tọa độ X,Y theo CRS tính toán</div><div class="two"><div><label for="west">West / X min</label><input id="west" type="number" value="500000" step="any"></div><div><label for="south">South / Y min</label><input id="south" type="number" value="1000000" step="any"></div><div><label for="east">East / X max</label><input id="east" type="number" value="500002" step="any"></div><div><label for="north">North / Y max</label><input id="north" type="number" value="1000001" step="any"></div></div>
+<button type="button" id="use-bounds" disabled>Dùng bounds raster (cùng CRS)</button>
+<div class="two"><div><label for="width">Chiều rộng ô · m</label><input id="width" type="number" value="1" min="0" step="any"></div><div><label for="height">Chiều cao ô · m</label><input id="height" type="number" value="1" min="0" step="any"></div></div><label for="policy">Ô ở biên</label><select id="policy"><option value="strict">Strict · extent chia hết</option><option value="clip">Clip · thu hẹp ô cuối</option></select></div>
+<div id="mesh-options" hidden><label for="mesh">mesh-artifact-v0 JSON</label><div class="input-action"><input id="mesh" placeholder="Chọn mesh/mesh.json"><button type="button" data-pick="mesh">Chọn mesh…</button></div><p class="tiny">XY hoặc XYZ; dùng XY làm hình học phẳng. Tối đa 1.000 cell.</p></div>
+<div id="gmsh-options" class="info" hidden><b>Reference preset · fixed 250 m synthetic inclined plane</b><p>Miền mẫu 1.000 × 1.000 m, EPSG:32649, Gmsh 4.15.2. Không phải chia DEM thích nghi hay polygon GIS bất kỳ.</p></div>
+</section>
+<section class="card"><h2><span class="step">03</span> Kiểm tra & chạy</h2>
+<label for="output">Thư mục kết quả</label><div class="input-action"><input id="output" readonly><button type="button" data-pick="output">Chọn…</button></div>
+<div class="two"><div><label for="max-cells">Giới hạn cell</label><input id="max-cells" type="number" value="1000" min="1" max="1000"></div><div><label for="subdivisions">Chia cạnh khi đổi CRS</label><input id="subdivisions" type="number" value="8" min="1" max="64"></div></div>
+<div class="actions"><button type="button" id="validate">Kiểm tra cấu hình</button><button type="button" id="run" class="primary" disabled>Chạy & trích thuộc tính →</button></div>
+<div id="validation" class="info muted" role="status">Hãy kiểm tra cấu hình trước khi chạy.</div>
+</section></form>
+</aside>
+<section class="viewer">
+<div class="card map-card"><div class="map-head"><div><p class="eyebrow">YOUR MESH, UP CLOSE</p><h2>Không gian lưới</h2></div><span class="pill" id="map-state">Chưa có cell</span></div>
+<div class="map-toolbar"><label><input id="show-edges" type="checkbox" checked> Cạnh lưới</label><label><input id="show-nodes" type="checkbox" checked> Tâm ô / node</label><button id="fit" type="button">Fit</button><button id="zoom-in" type="button" aria-label="Phóng to">＋</button><button id="zoom-out" type="button" aria-label="Thu nhỏ">−</button></div>
+<div class="map-shell"><svg id="map" role="img" aria-label="Lưới cell trong CRS tính toán" preserveAspectRatio="xMidYMid meet"></svg><div id="empty-map"><span class="mesh-symbol">△</span><h3>Một miền mới đang chờ bạn</h3><p>Chọn nguồn rồi kiểm tra cấu hình.<br>Lưới hiện ở đây khi hình học đã sẵn sàng.</p></div></div>
+<div class="map-foot"><span>● Chấm đỏ = tâm ô, không phải đỉnh Gmsh</span><span id="map-crs">X,Y · metre</span></div></div>
+<div class="results-row"><section class="card"><h2>Ô đang chọn</h2><p class="tiny">Bấm một polygon hoặc tâm ô để xem thuộc tính.</p><div id="cell-info" class="info muted">Chưa chọn cell.</div></section><section class="card"><h2>Trạng thái chạy</h2><div id="job-status" class="info muted" role="status">Chưa có run.</div><div id="progress" hidden class="progress"><i></i></div><div id="exports" class="actions" hidden><button id="csv" type="button">Tải CSV</button><button id="json" type="button">Tải JSON</button><button id="copy-output" type="button">Sao chép đường dẫn</button></div></section></div>
+<details class="card"><summary>Giới hạn v1 & ý nghĩa kết quả</summary><p class="tiny">Tối đa 1.000 cell · source ≤ 10M pixel · đọc ≤ 2M pixel · ≤ 5M candidate pairs · ≤ 65.536 pixel/window. Raster khác CRS đọc bảo thủ nhiều cửa sổ hơn. Gmsh chỉ một preset tham chiếu; chưa arbitrary polygon, DEM-adaptive generation hay routing/Phase 1. Coverage/QA extract không phải kiểm chứng thủy văn hoặc hiệu năng GNN. Hash chỉ file raster chính; sidecar và độ chính xác datum chưa kiểm chứng.</p></details>
+</section></div>
+<footer>Made for thoughtful maps. <span>Mesh Cherry · dữ liệu nằm trên máy của bạn</span></footer>
+</main>
+<dialog id="picker"><div class="picker-head"><h2>Chọn nguồn cục bộ</h2><button id="close-picker" type="button" aria-label="Đóng hộp chọn">×</button></div><div id="roots" class="actions"></div><div class="input-action"><input id="browse-path" aria-label="Thư mục đang xem"><button id="browse-go" type="button">Mở thư mục</button></div><div id="breadcrumbs" class="tiny"></div><div id="entries"></div><p id="picker-error" role="alert"></p><button id="choose-directory" type="button" class="primary" hidden>Chọn thư mục này</button></dialog>
+<div id="toast" role="alert" hidden></div>
+</body></html>

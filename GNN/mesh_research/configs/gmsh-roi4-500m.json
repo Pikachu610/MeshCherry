@@ -1,0 +1,33 @@
+{
+  "schema_version": "mesh-run-config-v0",
+  "run_name": "gmsh-roi4-500m",
+  "generator": {
+    "name": "gmsh",
+    "version": "auto",
+    "executable": "../../Test_chialuoi/gmsh-4.15.2-Windows64/gmsh.exe",
+    "parameters": {
+      "target_edge": 500.0,
+      "algorithm": 5,
+      "random_seed": 1
+    }
+  },
+  "domain": {
+    "name": "ROI4",
+    "kind": "roi_boundary",
+    "boundary_source": "../../../ROI/ROI4.shp",
+    "simplification": {
+      "method": "rdp_closed_ring",
+      "tolerances": [10.0, 25.0, 50.0, 100.0, 200.0, 500.0],
+      "max_relative_area_difference": 0.005,
+      "max_hausdorff_distance": 250.0,
+      "hausdorff_sampling_interval": 25.0
+    }
+  },
+  "crs": "EPSG:32649",
+  "coordinate_units": "m",
+  "state_units": {
+    "volume": "m3",
+    "depth": "m"
+  },
+  "output_root": "../mesh_runs"
+}

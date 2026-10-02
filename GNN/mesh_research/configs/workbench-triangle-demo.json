@@ -1,0 +1,9 @@
+{
+  "schema_version": "gis-workbench-run-config-v0",
+  "run_name": "synthetic-triangle-demo", "analysis_crs": "EPSG:32649",
+  "raster_path": "../../../sample-data/sample_10_30.tif",
+  "band": 1, "semantics": "intensive", "value_units": "synthetic-value",
+  "output_root": "../../../results",
+  "cell_source": {"kind": "mesh_artifact",
+    "path": "../../../sample-data/two_triangles.json"}
+}
