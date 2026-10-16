@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dem-adaptive-summary-v1",
+  "type": "object",
+  "required": ["schema_version", "run_id", "status", "selection_status", "selected_winner", "display_case", "selection_trace", "baseline", "cases", "unique_adaptive_case_count", "repeatability"],
+  "properties": {
+    "schema_version": {"const": "dem-adaptive-summary-v1"},
+    "run_id": {"type": "string"},
+    "status": {"enum": ["complete", "fail"]},
+    "selection_status": {"enum": ["winner", "no_winner"]},
+    "selected_winner": {"type": ["string", "null"]},
+    "display_case": {"type": ["string", "null"]},
+    "selection_trace": {
+      "type": "object",
+      "required": ["eligible_benefit_positive_case_ids", "cases", "pareto_front_case_ids", "maximum_pareto_front_benefit_pct", "tie_set_case_ids", "selected_winner", "selection_reason"],
+      "properties": {
+        "eligible_benefit_positive_case_ids": {"type": "array"},
+        "cases": {"type": "array"},
+        "pareto_front_case_ids": {"type": "array"},
+        "maximum_pareto_front_benefit_pct": {"type": ["number", "null"]},
+        "tie_set_case_ids": {"type": "array"},
+        "selected_winner": {"type": ["string", "null"]},
+        "selection_reason": {"type": ["string", "null"]}
+      }
+    },
+    "cases": {"type": "array", "minItems": 11, "maxItems": 11},
+    "unique_adaptive_case_count": {"const": 11},
+    "repeatability": {"type": "object"}
+  }
+}

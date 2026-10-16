@@ -59,6 +59,12 @@ def public_command(config_path, log_path):
     env = dict(os.environ)
     src = str(Path(__file__).resolve().parents[1])
     env['PYTHONPATH'] = src + os.pathsep + env.get('PYTHONPATH','')
+    from .job_control import current, run_logged
+    if current() is not None:
+        result=run_logged([sys.executable,'-m','mesh_research','run',str(config_path)],
+            log_path,TIMEOUT_SECONDS,env=env)
+        if result.returncode: raise ValueError(f'public mesh-research exited {result.returncode}; see meshing/research-console.log')
+        return
     kwargs = {'start_new_session':True} if os.name != 'nt' else {}
     with Path(log_path).open('w',encoding='utf-8') as log:
         process = subprocess.Popen([sys.executable,'-m','mesh_research','run',str(config_path)],

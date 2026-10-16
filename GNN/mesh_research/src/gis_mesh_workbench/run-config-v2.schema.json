@@ -1,0 +1,438 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "extraction_engine",
+    "run_name",
+    "analysis_crs",
+    "cell_source",
+    "output_root",
+    "operation"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "gis-workbench-run-config-v2"
+    },
+    "extraction_engine": {
+      "const": "indexed_windowed_v1"
+    },
+    "run_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "analysis_crs": {
+      "type": "string",
+      "minLength": 1
+    },
+    "raster_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "output_root": {
+      "type": "string",
+      "minLength": 1
+    },
+    "band": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "semantics": {
+      "enum": [
+        "intensive",
+        "extensive",
+        "categorical"
+      ]
+    },
+    "value_units": {
+      "type": "string",
+      "minLength": 1
+    },
+    "edge_subdivisions": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64
+    },
+    "indexed_limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_source_pixels": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000000
+        },
+        "max_pixels_read": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2000000
+        },
+        "max_candidate_pairs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000000
+        },
+        "max_window_pixels": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65536
+        }
+      }
+    },
+    "cell_source": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "executable",
+            "sizing",
+            "h_min_m",
+            "h_max_m"
+          ],
+          "properties": {
+            "kind": {
+              "const": "gmsh_generated"
+            },
+            "executable": {
+              "type": "string",
+              "minLength": 1
+            },
+            "boundary_path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "extent": {
+              "type": "array",
+              "minItems": 4,
+              "maxItems": 4,
+              "items": {
+                "type": "number"
+              }
+            },
+            "sizing": {
+              "enum": [
+                "uniform",
+                "relief",
+                "sf1_relief"
+              ]
+            },
+            "h_min_m": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "h_max_m": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "relief_radius_m": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "max_cells": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            },
+            "roi_raster_path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "dem_raster_path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "dem_band": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "sf1_scale": {
+              "type": "number",
+              "minimum": 0.25,
+              "maximum": 4
+            },
+            "dem_value_units": {
+              "const": "m"
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "sizing": {
+                    "const": "relief"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "dem_raster_path",
+                  "dem_band",
+                  "relief_radius_m"
+                ]
+              },
+              "else": {
+                "if": {"properties": {"sizing": {"const": "sf1_relief"}}},
+                "then": {
+                  "required": ["dem_raster_path", "dem_band", "dem_value_units", "sf1_scale"],
+                  "properties": {"h_min_m": {"const": 250}, "h_max_m": {"const": 1000}},
+                  "not": {"required": ["relief_radius_m"]}
+                },
+                "else": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "dem_raster_path"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "dem_band"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "relief_radius_m"
+                      ]
+                    },
+                    {
+                      "required": ["sf1_scale"]
+                    },
+                    {
+                      "required": ["dem_value_units"]
+                    }
+                  ]
+                }
+                }
+              }
+            },
+            {
+              "if": {"properties": {"sizing": {"const": "relief"}}},
+              "then": {"not": {"anyOf": [{"required": ["sf1_scale"]}, {"required": ["dem_value_units"]}]}}
+            }
+          ],
+          "oneOf": [
+            {
+              "required": [
+                "extent"
+              ]
+            },
+            {
+              "required": [
+                "boundary_path"
+              ]
+            },
+            {
+              "required": [
+                "roi_raster_path"
+              ]
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "preset"
+          ],
+          "properties": {
+            "kind": {
+              "const": "gmsh_reference"
+            },
+            "preset": {
+              "const": "inclined_plane_250m_v0"
+            },
+            "max_cells": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "path"
+          ],
+          "properties": {
+            "kind": {
+              "const": "mesh_artifact"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "max_cells": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "extent",
+            "cell_width_m",
+            "cell_height_m",
+            "boundary_policy"
+          ],
+          "properties": {
+            "kind": {
+              "const": "structured_grid"
+            },
+            "extent": {
+              "type": "array",
+              "minItems": 4,
+              "maxItems": 4,
+              "items": {
+                "type": "number"
+              }
+            },
+            "cell_width_m": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "cell_height_m": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "boundary_policy": {
+              "enum": [
+                "strict",
+                "clip"
+              ]
+            },
+            "max_cells": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "roi_raster_path": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "path",
+            "geometry_digest"
+          ],
+          "properties": {
+            "kind": {
+              "const": "frozen_cells"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "geometry_digest": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "max_cells": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            }
+          }
+        }
+      ]
+    },
+    "operation": {
+      "enum": [
+        "mesh_only",
+        "extract"
+      ]
+    },
+    "resolution_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "band"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "band": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "extract"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "raster_path",
+          "band",
+          "semantics",
+          "value_units"
+        ],
+        "properties": {
+          "cell_source": {
+            "properties": {
+              "kind": {
+                "const": "frozen_cells"
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "cell_source": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "gmsh_generated",
+                  "structured_grid",
+                  "mesh_artifact"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "const": "extract"
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "required": [
+            "resolution_reference"
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mesh-qa-v0",
+  "type": "object",
+  "required": ["schema_version", "status", "hard_gates"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "mesh-qa-v0"},
+    "status": {"type": "string"},
+    "hard_gates": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "remapping_checks": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "boundary_assessment": {"type": "object"}
+  }
+}

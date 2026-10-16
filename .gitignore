@@ -13,3 +13,6 @@ Test_chialuoi/
 .env*
 dist/
 build/
+
+# Local portable candidates are distributed separately from source.
+/MeshCherry/

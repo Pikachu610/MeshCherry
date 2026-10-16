@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mesh-run-config-v0",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_name",
+    "generator",
+    "domain",
+    "crs",
+    "coordinate_units",
+    "state_units",
+    "output_root"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "mesh-run-config-v0"},
+    "run_name": {"type": "string"},
+    "generator": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": {"type": "string"},
+        "version": {"type": "string"}
+      }
+    },
+    "domain": {
+      "type": "object",
+      "required": ["name", "kind"],
+      "properties": {
+        "name": {"type": "string"},
+        "kind": {"type": "string"},
+        "boundary_source": {"type": "string"},
+        "simplification": {
+          "type": "object",
+          "properties": {
+            "method": {"type": "string"},
+            "tolerances": {"type": "array", "items": {"type": "number"}},
+            "max_relative_area_difference": {"type": "number"},
+            "max_hausdorff_distance": {"type": "number"},
+            "hausdorff_sampling_interval": {"type": "number"}
+          }
+        }
+      }
+    },
+    "crs": {"type": "string"},
+    "coordinate_units": {"type": "string"},
+    "state_units": {
+      "type": "object",
+      "required": ["volume", "depth"],
+      "properties": {
+        "volume": {"type": "string"},
+        "depth": {"type": "string"}
+      }
+    },
+    "remapping": {
+      "type": "object",
+      "required": ["datasets"],
+      "properties": {
+        "datasets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path"],
+            "properties": {"path": {"type": "string"}}
+          }
+        },
+        "conservation_tolerance": {"type": "number"}
+      }
+    },
+    "output_root": {"type": "string"}
+  }
+}

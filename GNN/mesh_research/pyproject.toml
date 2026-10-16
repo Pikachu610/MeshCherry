@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mesh-research"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Reproducible unstructured-mesh research pipeline for the GNN track"
 requires-python = ">=3.10"
 dependencies = [
@@ -12,6 +12,7 @@ dependencies = [
   "scipy>=1.13,<2",
   "rasterio>=1.4,<2",
   "shapely>=2.0,<3",
+  "pyshp>=2.3,<3",
   "matplotlib>=3.9,<4",
   "jsonschema>=4.23,<5"
 ]
@@ -25,6 +26,9 @@ gis-mesh-workbench = "gis_mesh_workbench.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+
+[tool.setuptools.dynamic]
+version = {attr = "gis_mesh_workbench._version.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["src"]

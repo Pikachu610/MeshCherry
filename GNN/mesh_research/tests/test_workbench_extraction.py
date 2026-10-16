@@ -109,7 +109,7 @@ class ExtractionCoreTests(unittest.TestCase):
 
     def test_crs_guards(self):
         self.write(crs=None)
-        with self.assertRaisesRegex(ValueError,'source raster CRS missing'):
+        with self.assertRaisesRegex(ValueError,'thiếu CRS'):
             self.extract()
         self.write()
         with self.assertRaisesRegex(ValueError,'projected'):
@@ -137,7 +137,8 @@ class ExtractionCoreTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(self.path.read_bytes()).hexdigest(),before)
         self.assertEqual(self.rect.xy,geometry)
         self.assertEqual(result['provenance']['raster_resampling'],'none')
-        self.assertEqual(result['provenance']['hash_scope'], 'main_raster_file_only')
+        self.assertEqual(result['provenance']['hash_scope'], 'raster_dataset_bundle_v1')
+        self.assertIn(str(self.path.resolve()), result['provenance']['source_files_sha256'])
         self.assertTrue(result['qa']['main_raster_unchanged'])
         self.assertNotIn('source_unchanged', result['qa'])
         self.assertEqual(result['provenance']['band_dtype'], 'float64')

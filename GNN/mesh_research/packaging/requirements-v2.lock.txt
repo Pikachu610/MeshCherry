@@ -22,6 +22,7 @@ pycparser==3.0
 pyinstaller==6.22.3
 pyinstaller-hooks-contrib==2026.8
 pyparsing==3.3.3
+pyshp==2.4.2
 python-dateutil==2.9.0.post0
 pythonnet==3.2.0
 pywebview==6.2.1

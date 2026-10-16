@@ -4,6 +4,7 @@ import copy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
+import re
 import secrets
 import sys
 import threading
@@ -13,14 +14,28 @@ import uuid
 import rasterio
 from .runner import effective_config, preflight, run, write_json
 from .spatial import metric_crs
+from .indexed_extraction import footprint
 from .adapters import _json
+from .gmsh_meshing import inspect_executable
 from .onboarding import sample_directory, tutorial_seen, acknowledge
+from .recent import read_recent, remember, save_recent
+from .gmsh_preferences import read_saved, save_checked
+from .job_control import JobControl, Cancelled, job_scope, checkpoint, finalize_manifest
+from .boundary import bundle_paths, read_boundary
+from .meshing_parameters import policy as meshing_policy
+from .workload_limits import MAX_MESH_CELLS, MAX_MESH_BYTES
+from .presentation import INTERACTIVE_CELL_LIMIT, display_policy, artifact_view
+from ._version import __version__
+from .build_info import identity
+from .raster_source import RASTER_SUFFIXES, bundle_paths as raster_bundle_paths, open_raster, check_driver, authorized_reads
 
 ASSETS=Path(__file__).with_name('webui')
 WORKSPACE=(Path(sys.executable).resolve().parent/'workspace'
            if getattr(sys, 'frozen', False) else Path(__file__).resolve().parents[4])
 ARTIFACTS={'manifest':'manifest.json','qa':'qa.json','cells':'cells.json',
-           'attributes':'attributes.json','csv':'attributes.csv','preview':'preview.png'}
+           'attributes':'attributes.json','csv':'attributes.csv','preview':'preview.png',
+           'msh':'meshing/mesh.msh','mesh':'meshing/mesh.json','gmsh_log':'meshing/gmsh.log',
+           'comparison':'comparison.json'}
 
 
 class AccessError(ValueError): pass
@@ -28,10 +43,15 @@ class AccessError(ValueError): pass
 
 class WorkbenchServer(ThreadingHTTPServer):
     daemon_threads=True
-    def __init__(self,workspace=WORKSPACE,port=0,allow_roots=(),tutorial_preferences=None):
+    def __init__(self,workspace=WORKSPACE,port=0,allow_roots=(),tutorial_preferences=None,recent_preferences=None,gmsh_preferences=None):
         self.workspace=Path(workspace).resolve(strict=True)
         self.sample_root=sample_directory()
         self.tutorial_preferences=tutorial_preferences
+        self.recent_preferences=Path(recent_preferences) if recent_preferences is not None else self.workspace/'.scratch/gis-mesh-workbench/recent-files.json'
+        self.gmsh_preferences=Path(gmsh_preferences) if gmsh_preferences is not None else self.workspace/'.scratch/gis-mesh-workbench/gmsh.json'
+        self.native_picker=None
+        self.picker_active=False
+        self.selected_files=set()
         self.output_roots=tuple(dict.fromkeys([self.workspace]+[Path(p).resolve(strict=True) for p in allow_roots]))
         self.roots=tuple(dict.fromkeys([*self.output_roots,self.sample_root]))
         if any(not p.is_dir() for p in self.roots): raise ValueError('allowed roots must be directories')
@@ -40,9 +60,21 @@ class WorkbenchServer(ThreadingHTTPServer):
         self.session_dir.mkdir(parents=True,exist_ok=False)
         self.output_root=self.permitted(self.workspace/'.scratch/gis-mesh-workbench/ui-runs',exists=False,write=True)
         self.output_root.mkdir(parents=True,exist_ok=True)
-        self.lock=threading.RLock(); self.validated={}; self.jobs={}; self.current_preflight=None
+        self.lock=threading.RLock(); self.validated={}; self.jobs={}; self.controls={}; self.current_preflight=None
+        self.preflight_generation=0; self.preflight_inflight=set()
         super().__init__(('127.0.0.1',port),Handler)
         self.host=f'127.0.0.1:{self.server_port}'; self.origin='http://'+self.host
+
+    def saved_gmsh(self):
+        return read_saved(self.gmsh_preferences)
+
+    def _active_job_locked(self):
+        return any(job['status'] in {'running','stopping'} for job in self.jobs.values())
+
+    def _invalidate_preflight_locked(self):
+        self.preflight_generation+=1
+        self.current_preflight=None
+        self.validated.clear()
 
     def permitted(self,path,*,exists=True,write=False):
         path=Path(path)
@@ -51,75 +83,348 @@ class WorkbenchServer(ThreadingHTTPServer):
         roots=self.output_roots if write else self.roots
         if write and (resolved==self.sample_root or self.sample_root in resolved.parents):
             raise AccessError('Dữ liệu mẫu chỉ được đọc, không được ghi kết quả tại đây')
-        if not any(resolved==root or root in resolved.parents for root in roots):
+        if not (not write and resolved in self.selected_files) and not any(resolved==root or root in resolved.parents for root in roots):
             raise AccessError('Path nằm ngoài thư mục được cho phép')
         if exists:
             resolved=resolved.resolve(strict=True)
-            if not any(resolved==root or root in resolved.parents for root in roots):
+            if not (not write and resolved in self.selected_files) and not any(resolved==root or root in resolved.parents for root in roots):
                 raise AccessError('Resolved path escaped allowed roots')
         return resolved
 
+    def choose_native(self,data):
+        if not isinstance(data,dict) or set(data)!={'kind'} or data['kind'] not in {'raster','mesh','gmsh','output','boundary'}:
+            raise ValueError('Unsupported picker kind')
+        with self.lock:
+            if self.native_picker is None: raise ValueError('Hộp chọn Windows chỉ có trong bản desktop')
+            if self.picker_active or self.preflight_inflight or self._active_job_locked():
+                raise ValueError('Đang xử lý. Hãy chờ trước khi chọn tệp khác.')
+            self.picker_active=True
+        try:
+            paths=self.native_picker(data['kind'])
+            if not paths: return dict(cancelled=True)
+            if not isinstance(paths,(tuple,list)) or len(paths)!=1: raise ValueError('Chọn đúng một tệp hoặc thư mục')
+            path=Path(paths[0])
+            if not path.is_absolute(): raise ValueError('Native picker must return an absolute path')
+            path=path.resolve(strict=True)
+            kind=data['kind']
+            with self.lock:
+                if kind=='output':
+                    if not path.is_dir() or path==Path(path.anchor): raise ValueError('Chọn một thư mục kết quả riêng, không chọn gốc ổ đĩa')
+                    if path==self.sample_root or self.sample_root in path.parents or path in self.sample_root.parents:
+                        raise AccessError('Dữ liệu mẫu chỉ được đọc')
+                    self.output_roots=tuple(dict.fromkeys([*self.output_roots,path]))
+                    self.roots=tuple(dict.fromkeys([*self.roots,path]))
+                else:
+                    suffixes={'raster':RASTER_SUFFIXES,'mesh':{'.json'},'gmsh':{'.exe'},'boundary':{'.shp'}}
+                    if not path.is_file() or path.suffix.lower() not in suffixes[kind]: raise ValueError('Tệp không đúng định dạng đã chọn')
+                    if kind=='gmsh' and path.name.lower()!='gmsh.exe': raise ValueError('Hãy chọn gmsh.exe')
+                    # Grant only this selected input, never its parent directory.
+                    if kind!='gmsh':
+                        self.selected_files.update(bundle_paths(path) if kind=='boundary' else raster_bundle_paths(path) if kind=='raster' else [path])
+                        self.remember_input(kind,path)
+                self._invalidate_preflight_locked()
+            return dict(cancelled=False,path=str(path))
+        finally:
+            with self.lock: self.picker_active=False
+
+    def remember_input(self,kind,path):
+        if self.sample_root==path or self.sample_root in path.parents: return
+        remember(self.recent_preferences,kind,path)
+
+    def recent_action(self,data):
+        with self.lock:
+            if self.picker_active or self.preflight_inflight or self._active_job_locked(): raise ValueError('Hãy chờ xử lý xong')
+            if data=={'action':'clear'}:
+                save_recent(self.recent_preferences,[]); return dict(items=[])
+            if not isinstance(data,dict) or set(data)!={'id'}: raise ValueError('Recent open accepts only id')
+            item=next((i for i in read_recent(self.recent_preferences) if i['id']==data['id']),None)
+            if item is None: raise ValueError('Tệp không còn trong lịch sử')
+            path=Path(item['path']).resolve(strict=True)
+            if not path.is_file(): raise ValueError('Tệp đã bị di chuyển hoặc xóa. Hãy chọn lại.')
+            if item['kind']=='raster':
+                with open_raster(path,require_crs=False) as source:
+                    check_driver(source)
+            elif item['kind']=='mesh':
+                if path.stat().st_size>MAX_MESH_BYTES or _json(path).get('schema_version')!='mesh-artifact-v0':
+                    raise ValueError('Tệp gần đây không còn là mesh JSON được hỗ trợ')
+            else:
+                files=bundle_paths(path)
+                crs=rasterio.crs.CRS.from_wkt(files[3].read_text(encoding='utf-8-sig'))
+                if not crs or not (crs.is_projected or crs.is_geographic): raise ValueError('SHP cần CRS ngang hợp lệ')
+                import shapefile
+                with shapefile.Reader(shp=str(files[0]),shx=str(files[1]),dbf=str(files[2])) as reader:
+                    if reader.shapeType!=shapefile.POLYGON: raise ValueError('SHP gần đây không còn là Polygon 2D')
+            # Explicit user reopen grants exactly the input; no parent/root grants.
+            self.selected_files.update(bundle_paths(path) if item['kind']=='boundary' else raster_bundle_paths(path) if item['kind']=='raster' else [path])
+            self.remember_input(item['kind'],path)
+            self._invalidate_preflight_locked()
+            return dict(kind=item['kind'],path=str(path))
+
     def normalize_form(self,data):
-        if not isinstance(data,dict) or data.get('schema_version')!='gis-workbench-run-config-v1':
-            raise ValueError('UI requires v1 config')
+        if not isinstance(data,dict) or data.get('schema_version') not in {'gis-workbench-run-config-v1','gis-workbench-run-config-v2'}:
+            raise ValueError('UI requires v1/v2 config')
         config=copy.deepcopy(data)
-        raster=self.permitted(config['raster_path'])
-        if raster.suffix.lower() not in {'.tif','.tiff'} or not raster.is_file(): raise ValueError('GeoTIFF required')
-        config['raster_path']=str(raster)
+        raster=None
+        if config.get('raster_path'):
+            raster=self.permitted(config['raster_path'])
+            if raster.suffix.lower() not in RASTER_SUFFIXES or not raster.is_file(): raise ValueError('GeoTIFF/ASC required')
+            config['raster_path']=str(raster)
+        elif config.get('operation')!='mesh_only': raise ValueError('GeoTIFF/ASC required for extraction')
         output=self.permitted(config['output_root'],write=True)
         if not output.is_dir(): raise ValueError('output root must be an existing directory')
         config['output_root']=str(output)
         source=config.get('cell_source',{})
-        inputs=[raster]
-        if source.get('kind')=='mesh_artifact':
+        inputs=[raster] if raster else []
+        if config.get('resolution_reference'):
+            reference=config['resolution_reference']
+            planned=self.permitted(reference['path'])
+            if planned.suffix.lower() not in RASTER_SUFFIXES or not planned.is_file(): raise ValueError('Planned extraction GeoTIFF/ASC required')
+            reference['path']=str(planned);inputs.append(planned)
+        if source.get('roi_raster_path'):
+            roi=self.permitted(source['roi_raster_path'])
+            if roi.suffix.lower() not in RASTER_SUFFIXES: raise ValueError('ROI GeoTIFF/ASC required')
+            source['roi_raster_path']=str(roi);inputs.append(roi)
+        if source.get('dem_raster_path'):
+            dem=self.permitted(source['dem_raster_path'])
+            if dem.suffix.lower() not in RASTER_SUFFIXES or not dem.is_file(): raise ValueError('DEM GeoTIFF/ASC required')
+            source['dem_raster_path']=str(dem);inputs.append(dem)
+        if source.get('kind')=='gmsh_generated':
+            executable=Path(source['executable'])
+            if not executable.is_absolute(): raise ValueError('Gmsh cần đường dẫn tuyệt đối')
+            source['executable']=str(executable.resolve(strict=True))
+            if source.get('boundary_path'):
+                boundary=self.permitted(source['boundary_path'])
+                files=bundle_paths(boundary)
+                for file in files: self.permitted(file)
+                source['boundary_path']=str(boundary);inputs.extend(files)
+        if source.get('kind') in {'mesh_artifact','frozen_cells'}:
             mesh=self.permitted(source['path'])
             if mesh.suffix.lower()!='.json' or not mesh.is_file(): raise ValueError('mesh JSON required')
-            source['path']=str(mesh); inputs.append(mesh)
+            source['path']=str(mesh)
+            if source['kind']=='frozen_cells':
+                if output==mesh.parent: raise ValueError('Output must not be frozen mesh directory')
+            else: inputs.append(mesh)
+        for candidate in list(inputs):
+            if candidate.suffix.lower() in RASTER_SUFFIXES:
+                for file in raster_bundle_paths(candidate):
+                    self.permitted(file)
+                    if file not in inputs:inputs.append(file)
         if any(output==p.parent or output in p.parents for p in inputs):
             raise ValueError('output root must be isolated from source directories')
         return config
 
     def validate_form(self,data):
         with self.lock:
+            if self.picker_active: raise ValueError('Hãy đóng hộp chọn tệp trước khi kiểm tra')
+            if self._active_job_locked(): raise ValueError('Hãy chờ tác vụ hiện tại hoàn tất trước khi kiểm tra')
+            self.preflight_generation+=1
+            generation=self.preflight_generation
             self.current_preflight=None; self.validated.clear()
+            self.preflight_inflight.add(generation)
+        try:
+            # Normalization can inspect bundles and filesystem paths; serialize
+            # outside the shared job lock while the in-flight guard prevents
+            # pickers and job starts from changing the validated inputs.
             config=self.normalize_form(data)
             ident=uuid.uuid4().hex; path=self.session_dir/(ident+'.json')
-            write_json(path,config); effective=effective_config(path)
+            write_json(path,config)
+            effective=effective_config(path)
             report,cells=preflight(effective)
-            if report['status']=='pass':
-                self.validated[ident]=path; self.current_preflight=ident
-            return dict(preflight_id=ident if report['status']=='pass' else None,report=report,
-                cells=[dict(cell_id=c.cell_id,kind=c.kind,xy=c.xy) for c in cells.cells] if cells else [])
-
-    def start_job(self,preflight_id):
+            display=display_policy(len(cells.cells) if cells else 0)
+            rendered_cells=([dict(cell_id=c.cell_id,kind=c.kind,xy=c.xy) for c in cells.cells]
+                            if cells and display['mode']=='interactive' else [])
+        except BaseException:
+            with self.lock: self.preflight_inflight.discard(generation)
+            raise
         with self.lock:
+            current=(generation==self.preflight_generation and not self.picker_active
+                     and not self._active_job_locked())
+            if current and report['status']=='pass':
+                self.validated[ident]=path; self.current_preflight=ident
+            self.preflight_inflight.discard(generation)
+            return dict(preflight_id=ident if current and report['status']=='pass' else None,
+                report=report,display=display,
+                cells=rendered_cells if cells and display['mode']=='interactive' else [],
+                superseded=not current)
+
+    def start_job(self,preflight_id,request_id=None):
+        with self.lock:
+            if request_id is not None:
+                if not isinstance(request_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,80}',request_id):
+                    raise ValueError('Invalid run request ID')
+                existing=next(((ident,job) for ident,job in self.jobs.items()
+                               if job.get('request_kind')=='run' and job.get('request_id')==request_id),None)
+                if existing:
+                    if existing[1].get('request_fingerprint')!=preflight_id:
+                        raise ValueError('Request ID already belongs to a different run')
+                    return dict(job_id=existing[0],operation=existing[1]['operation'],
+                                request_id=request_id,status=existing[1]['status'])
+            if self.picker_active: raise ValueError('Hãy đóng hộp chọn tệp trước khi chạy')
+            # Older validations may still be doing filesystem work, but once a
+            # newer generation has passed they must not block its run.
+            if self.preflight_generation in self.preflight_inflight:
+                raise ValueError('Hãy chờ preflight hiện tại hoàn tất trước khi chạy')
             if preflight_id!=self.current_preflight or preflight_id not in self.validated:
                 raise ValueError('Preflight đã hết hiệu lực; hãy kiểm tra lại')
-            if any(j['status']=='running' for j in self.jobs.values()): raise ValueError('Một job đang chạy')
+            if any(j['status'] in {'running','stopping'} for j in self.jobs.values()): raise ValueError('Một job đang chạy hoặc đang dừng')
             if len(self.jobs)>=50: raise ValueError('Session job limit reached; restart UI')
             path=self.validated[preflight_id]; self.current_preflight=None
-            job_id=uuid.uuid4().hex; self.jobs[job_id]=dict(status='running',stage='config',result=None)
+            operation=_json(path).get('operation','extract')
+            job_id=uuid.uuid4().hex
+            job=dict(status='running',stage='config',operation=operation,result=None)
+            if request_id:
+                job.update(request_kind='run',request_id=request_id,request_fingerprint=preflight_id)
+            self.jobs[job_id]=job
+            control=JobControl(lock=self.lock); self.controls[job_id]=control
             def update(stage):
-                with self.lock: self.jobs[job_id]['stage']=stage
+                with self.lock:
+                    self.jobs[job_id]['stage']=stage
+                    control.stage(stage)
             def worker():
-                try: result=run(path,progress=update)
+                try:
+                    with job_scope(control), authorized_reads(self.permitted):
+                        checkpoint()
+                        result=run(path,progress=update)
+                except Cancelled as error:
+                    result=dict(status='cancelled',output=str(control.output) if control.output else None,error=str(error))
                 except Exception as error: result=dict(status='fail',output=None,error=str(error))
                 with self.lock:
-                    self.jobs[job_id].update(status=result['status'],stage='done' if result['status']=='pass' else 'failed',result=result)
+                    # The shared lock orders accepted Stop against terminal success.
+                    if control.cancel.is_set() and not control.committed:
+                        result.update(status='cancelled',error='Đã dừng theo yêu cầu')
+                    control.finished=control.clock()
+                    self.jobs[job_id].update(status=result['status'],stage='done' if result['status']=='pass' else result['status'],result=result)
+            threading.Thread(target=worker,daemon=True).start()
+            if request_id:
+                return dict(job_id=job_id,operation=operation,request_id=request_id,status='running')
+            return dict(job_id=job_id)
+
+    def start_comparison(self,data):
+        """Compare an owned accepted mesh; calculations never replace that mesh."""
+        required={'mesh_job_id','raster_path','band','semantics','value_units','cell_size_m'}
+        if not isinstance(data,dict) or required-set(data) or set(data)-required-{'request_id'}:
+            raise ValueError('Comparison requires mesh, raster, band, semantics, units and square size')
+        import math
+        import hashlib
+        import re
+        request_id=data.get('request_id')
+        if request_id is not None and (not isinstance(request_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,80}',request_id)):
+            raise ValueError('Invalid comparison request ID')
+        if (not isinstance(data['mesh_job_id'],str) or not isinstance(data['raster_path'],str)
+                or type(data['band']) is not int or data['band']<1
+                or data['semantics'] not in {'intensive','extensive','categorical'}
+                or not isinstance(data['value_units'],str) or not data['value_units'].strip() or len(data['value_units'])>128
+                or type(data['cell_size_m']) not in (int,float)
+                or not math.isfinite(data['cell_size_m']) or data['cell_size_m']<=0):
+            raise ValueError('Cấu hình so sánh không hợp lệ')
+        with self.lock:
+            fingerprint=hashlib.sha256(json.dumps(data,sort_keys=True,allow_nan=False).encode()).hexdigest()
+            if request_id:
+                existing=next(((ident,job) for ident,job in self.jobs.items() if job.get('request_id')==request_id),None)
+                if existing:
+                    if existing[1].get('request_fingerprint')!=fingerprint:
+                        raise ValueError('Request ID already belongs to a different comparison')
+                    return dict(job_id=existing[0])
+            if self.picker_active or self.preflight_inflight or self._active_job_locked():
+                raise ValueError('Hãy chờ tác vụ hiện tại hoàn tất')
+            if len(self.jobs)>=50: raise ValueError('Session job limit reached; restart UI')
+            cells=self.artifact(data['mesh_job_id'],'cells')
+            mesh_manifest=self.artifact(data['mesh_job_id'],'manifest')
+            mesh_data=_json(cells)
+            if (not mesh_data.get('cells') or any(row.get('kind')!='triangle' for row in mesh_data['cells'])):
+                raise ValueError('Chọn lưới tam giác đã tạo để so sánh với lưới vuông')
+            raster=self.permitted(data['raster_path'])
+            for file in raster_bundle_paths(raster): self.permitted(file)
+            analysis_crs=metric_crs(mesh_data['crs_wkt']).to_wkt()
+            config={**copy.deepcopy(data),'raster_path':str(raster),'analysis_crs':analysis_crs,
+                    'cells_path':str(cells),'edge_subdivisions':8}
+            from .extraction import _digest
+            retained={str(cells):_digest(cells),str(mesh_manifest):_digest(mesh_manifest)}
+            manifest=dict(schema_version='mesh-comparison-manifest-v1',operation='comparison',
+                status='running',application_build=identity(),mesh_job_id=config['mesh_job_id'],
+                input_hashes=retained,artifact_hashes={})
+            job_id=uuid.uuid4().hex
+            self.jobs[job_id]=dict(status='running',stage='comparison',operation='comparison',
+                request_id=request_id,request_fingerprint=fingerprint,result=None)
+            control=JobControl(lock=self.lock);self.controls[job_id]=control
+            def worker():
+                output=None;comparison_manifest=copy.deepcopy(manifest)
+                try:
+                    with job_scope(control),authorized_reads(self.permitted):
+                        checkpoint()
+                        from .comparison import compare_mesh
+                        output=self.permitted(self.output_root/('comparison-'+job_id),exists=False,write=True)
+                        output.mkdir(exist_ok=False);control.output=output
+                        write_json(output/'config.json',config)
+                        report=compare_mesh(cells,raster,analysis_crs=analysis_crs,
+                            cell_size_m=config['cell_size_m'],band=config['band'],
+                            semantics=config['semantics'],value_units=config['value_units'],edge_subdivisions=8)
+                        checkpoint()
+                        if any(_digest(Path(p))!=expected for p,expected in retained.items()):
+                            raise ValueError('Lưới mốc đã thay đổi trong lúc so sánh')
+                        write_json(output/'comparison.json',report)
+                        comparison_manifest['status']='pass'
+                        comparison_manifest=finalize_manifest(output,comparison_manifest)
+                        result=dict(status=comparison_manifest['status'],output=str(output),error=comparison_manifest.get('error'))
+                except Cancelled as error:
+                    result=dict(status='cancelled',output=str(output) if output else None,error=str(error))
+                    comparison_manifest.update(status='cancelled',error=str(error),artifact_hashes={},
+                                    cancelled_stage=control.phase)
+                except Exception as error:
+                    result=dict(status='fail',output=str(output) if output else None,error=str(error))
+                    comparison_manifest.update(status='fail',error=str(error),artifact_hashes={},
+                                    failed_stage=control.phase)
+                with self.lock:
+                    if control.cancel.is_set() and not control.committed:
+                        result.update(status='cancelled',error='Đã dừng theo yêu cầu')
+                        comparison_manifest.update(status='cancelled',error=result['error'],artifact_hashes={},
+                                        cancelled_stage=control.phase)
+                    if output and result['status']!='pass':
+                        comparison_manifest.update(status=result['status'],error=result.get('error'),artifact_hashes={})
+                        if result['status']=='cancelled': comparison_manifest.setdefault('cancelled_stage',control.phase)
+                        else: comparison_manifest.setdefault('failed_stage',control.phase)
+                        diagnostic=dict(comparison_manifest)
+                        try:
+                            write_json(output/'manifest.json',diagnostic)
+                            write_json(output/'qa.json',dict(schema_version='mesh-comparison-qa-v1',
+                                status=result['status'],operation='comparison',error=result.get('error')))
+                        except OSError as error:
+                            result['diagnostic_error']=str(error)
+                    control.finished=control.clock()
+                    self.jobs[job_id].update(status=result['status'],stage='done' if result['status']=='pass' else result['status'],result=result)
             threading.Thread(target=worker,daemon=True).start()
             return dict(job_id=job_id)
 
     def job(self,ident):
         with self.lock:
             if ident not in self.jobs: raise ValueError('Unknown job')
-            return copy.deepcopy(self.jobs[ident])
+            result=copy.deepcopy(self.jobs[ident])
+            if ident in self.controls:
+                result['monitor']=self.controls[ident].snapshot()
+                result['monitor'].pop('log_lines')
+            return result
+
+    def stop_job(self,data):
+        if not isinstance(data,dict) or set(data)!={'job_id'} or not isinstance(data['job_id'],str):
+            raise ValueError('Stop accepts only job_id')
+        ident=data['job_id']
+        with self.lock:
+            if ident not in self.jobs or ident not in self.controls: raise ValueError('Unknown job')
+            accepted=self.jobs[ident]['status'] in {'running','stopping'} and self.controls[ident].request_cancel()
+            if accepted: self.jobs[ident]['status']='stopping'
+            return dict(job_id=ident,accepted=accepted,status='stopping' if accepted else self.jobs[ident]['status'])
 
     def artifact(self,ident,name):
         if name not in ARTIFACTS: raise AccessError('Unsupported artifact')
         job=self.job(ident)
-        if job['status']=='running' or not job['result'] or not job['result'].get('output'):
+        if job['status'] in {'running','stopping'} or not job['result'] or not job['result'].get('output'):
             raise ValueError('Artifact chưa sẵn sàng')
+        if job['status']!='pass' and name not in {'manifest','qa','gmsh_log'}:
+            raise AccessError('Lượt chạy chưa hoàn tất; chỉ có chẩn đoán và log')
         output=self.permitted(job['result']['output'])
+        if name not in {'manifest','qa','gmsh_log'}:
+            manifest=self.permitted(output/'manifest.json')
+            if _json(manifest).get('status')!='pass': raise AccessError('Run manifest chưa xác nhận thành công')
         path=(output/ARTIFACTS[name]).resolve(strict=True)
         if output not in path.parents: raise AccessError('Artifact escaped run directory')
         return path
@@ -171,24 +476,73 @@ class Handler(BaseHTTPRequestHandler):
                      for weight in ('Regular', 'Medium', 'SemiBold', 'Bold')}
             if path in fonts:
                 return self.respond((ASSETS/'fonts'/fonts[path]).read_bytes(), content_type='font/ttf')
-            if path in {'/','/app.js','/style.css','/wizard.css','/icon.png','/favicon.ico'}:
+            if path in {'/','/app.js','/coach.js','/style.css','/wizard.css','/icon.png','/favicon.ico'}:
                 name={'/':'index.html','/icon.png':'meshcherry-icon-v1.png',
                       '/favicon.ico':'meshcherry-icon-v1.ico'}.get(path,path[1:])
-                mime={'index.html':'text/html','app.js':'text/javascript','style.css':'text/css','wizard.css':'text/css',
+                mime={'index.html':'text/html','app.js':'text/javascript','coach.js':'text/javascript','style.css':'text/css','wizard.css':'text/css',
                       'meshcherry-icon-v1.png':'image/png','meshcherry-icon-v1.ico':'image/vnd.microsoft.icon'}[name]
-                return self.respond((ASSETS/name).read_bytes(),content_type=mime)
+                body=(ASSETS/name).read_bytes()
+                if name=='index.html':body=body.replace(b'{{APP_VERSION}}',__version__.encode('ascii'))
+                return self.respond(body,content_type=mime)
             if path=='/api/bootstrap':
+                gmsh_saved=self.server.saved_gmsh()
+                gmsh_path=gmsh_saved.get('executable','')
                 return self.respond(dict(roots=[str(p) for p in self.server.roots],output_roots=[str(p) for p in self.server.output_roots],output_root=str(self.server.output_root),
+                    meshing_parameters=meshing_policy(),application_build=identity(),
+                    mesh_limits=dict(max_cells=MAX_MESH_CELLS,interactive_cells=INTERACTIVE_CELL_LIMIT),
+                    gmsh_path=gmsh_path,gmsh_saved=gmsh_saved,native_picker=self.server.native_picker is not None,
                     tutorial_seen=tutorial_seen(self.server.tutorial_preferences),
                     sample_raster=str(self.server.sample_root/'sample_10_30.tif'),
                     sample_mesh=str(self.server.sample_root/'two_triangles.json')))
+            if path=='/api/recent':
+                return self.respond(dict(items=[dict(id=i['id'],kind=i['kind'],name=Path(i['path']).name,opened=i['opened'])
+                    for i in read_recent(self.server.recent_preferences)]))
+            if path=='/api/research/sf1':
+                from .research_reference import sf1_reference
+                return self.respond(sf1_reference())
             query=parse_qs(parsed.query)
+            if path=='/api/job-log':
+                ident=query.get('id',[''])[0]
+                with self.server.lock:
+                    if ident not in self.server.controls: raise ValueError('Unknown job')
+                    snapshot=self.server.controls[ident].log_snapshot(int(query.get('cursor',['0'])[0]))
+                return self.respond(snapshot)
+            if path=='/api/active-job':
+                # Authenticated session metadata only; no source/config/path data.
+                with self.server.lock:
+                    active=next((ident for ident,job in self.server.jobs.items()
+                                 if job['status'] in {'running','stopping'}),None)
+                    operation=self.server.jobs[active].get('operation') if active else None
+                    request_id=self.server.jobs[active].get('request_id') if active else None
+                return self.respond(dict(job_id=active,**({'operation':operation} if operation else {}),
+                    **({'request_id':request_id} if request_id else {})))
+            if path=='/api/comparison/status':
+                request_id=query.get('request_id',[''])[0]
+                if not isinstance(request_id,str) or not 8<=len(request_id)<=80:
+                    raise ValueError('Invalid comparison request ID')
+                with self.server.lock:
+                    found=next(((ident,job) for ident,job in self.server.jobs.items()
+                                if job.get('operation')=='comparison' and job.get('request_id')==request_id),None)
+                    result=dict(job_id=found[0],operation='comparison',status=found[1]['status']) if found else dict(job_id=None)
+                return self.respond(result)
+            if path=='/api/run/status':
+                request_id=query.get('request_id',[''])[0]
+                if not isinstance(request_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,80}',request_id):
+                    raise ValueError('Invalid run request ID')
+                with self.server.lock:
+                    found=next(((ident,job) for ident,job in self.server.jobs.items()
+                                if job.get('request_kind')=='run' and job.get('request_id')==request_id),None)
+                    result=(dict(job_id=found[0],operation=found[1]['operation'],request_id=request_id,
+                                 status=found[1]['status']) if found else dict(job_id=None))
+                return self.respond(result)
             if path=='/api/job': return self.respond(self.server.job(query.get('id',[''])[0]))
             if path=='/api/artifact':
                 name=query.get('name',[''])[0]; artifact=self.server.artifact(query.get('id',[''])[0],name)
-                mime='image/png' if name=='preview' else 'text/csv' if name=='csv' else 'application/json'
+                if query.get('view')==['1'] and query.get('download')!=['1'] and name in {'cells','attributes','qa'}:
+                    return self.respond(artifact_view(name,_json(artifact)))
+                mime='image/png' if name=='preview' else 'text/csv' if name=='csv' else 'text/plain' if name in {'msh','gmsh_log'} else 'application/json'
                 return self.respond(artifact.read_bytes(),content_type=mime,
-                    filename=ARTIFACTS[name] if query.get('download')==['1'] else None)
+                    filename=Path(ARTIFACTS[name]).name if query.get('download')==['1'] else None)
             self.respond(dict(error='Not found'),404)
         except AccessError as error: self.respond(dict(error=str(error)),403)
         except Exception as error: self.respond(dict(error=str(error)),400)
@@ -204,6 +558,28 @@ class Handler(BaseHTTPRequestHandler):
             if not 0<count<=65536: return self.respond(dict(error='Request body size limit'),413)
             raw=self.rfile.read(count); self.body_consumed=True
             data=json.loads(raw,parse_constant=lambda value: (_ for _ in ()).throw(ValueError('nonfinite JSON')))
+            if path=='/api/picker': return self.respond(self.server.choose_native(data))
+            if path=='/api/recent': return self.respond(self.server.recent_action(data))
+            if path=='/api/input-preview':
+                from .input_preview import raster_preview, boundary_preview
+                if not isinstance(data,dict) or set(data)-{'path','kind','band','analysis_crs'}:
+                    raise ValueError('Unsupported preview fields')
+                source=self.server.permitted(data['path'])
+                if data.get('kind')=='raster':
+                    for file in raster_bundle_paths(source):self.server.permitted(file)
+                    return self.respond(raster_preview(source,data.get('band',1)))
+                if data.get('kind')=='boundary':
+                    for file in bundle_paths(source):self.server.permitted(file)
+                    domain,report=read_boundary(source,data['analysis_crs'])
+                    return self.respond(boundary_preview(domain,data['analysis_crs']))
+                raise ValueError('Unsupported preview kind')
+            if path=='/api/boundary':
+                if set(data)!={'path','analysis_crs'}: raise ValueError('Boundary accepts only path and analysis_crs')
+                boundary=self.server.permitted(data['path'])
+                for file in bundle_paths(boundary): self.server.permitted(file)
+                domain,report=read_boundary(boundary,data['analysis_crs'])
+                with self.server.lock: self.server.remember_input('boundary',boundary)
+                return self.respond(report)
             if path=='/api/tutorial':
                 if data != {'action':'acknowledge'}: raise ValueError('unsupported tutorial action')
                 acknowledge(self.server.tutorial_preferences)
@@ -222,23 +598,47 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(dict(path=str(directory),entries=entries))
             if path=='/api/source':
                 source=self.server.permitted(data['path'])
-                if source.suffix.lower() not in {'.tif','.tiff'}: raise ValueError('GeoTIFF required')
-                with rasterio.open(source,'r') as src:
+                if source.suffix.lower() not in RASTER_SUFFIXES: raise ValueError('GeoTIFF/ASC required')
+                for file in raster_bundle_paths(source):self.server.permitted(file)
+                with open_raster(source,require_crs=False) as src:
+                    check_driver(src)
                     band=data.get('band',1)
                     if type(band) is not int or not 1<=band<=src.count: raise ValueError('band out of range')
                     crs=str(src.crs) if src.crs else None
                     try: metric_crs(crs); eligible=True
                     except Exception: eligible=False
-                    report=dict(path=str(source),crs=crs,crs_wkt=src.crs.to_wkt() if src.crs else None,
+                    report=dict(path=str(source),driver=src.driver,crs=crs,crs_wkt=src.crs.to_wkt() if src.crs else None,
                         shape=[src.height,src.width],band_count=src.count,band=band,dtype=src.dtypes[band-1],
                         nodata=str(src.nodatavals[band-1]),mask=[f.name for f in src.mask_flag_enums[band-1]],
                         scale=str(src.scales[band-1]),offset=str(src.offsets[band-1]),bounds=list(src.bounds),
                         projected_metre=eligible)
+                    if src.crs and data.get('analysis_crs'):
+                        target=metric_crs(data['analysis_crs'])
+                        from .raster_resolution import describe
+                        report['resolution']=describe(src,target,band)
+                        polygon=footprint(src,target,0,0,src.width,src.height,subdivisions=8)
+                        report['display_footprint']=dict(xy=list(polygon.exterior.coords)[:-1],
+                            crs_wkt=target.to_wkt(),bounds=list(polygon.bounds),
+                            approximate=src.crs!=target)
+                with self.server.lock: self.server.remember_input('raster',source)
                 return self.respond(report)
+            if path=='/api/gmsh':
+                if set(data)!={'path'}: raise ValueError('Gmsh check accepts only path')
+                if not isinstance(data['path'],str) or not data['path'].strip(): raise ValueError('Chưa chọn gmsh.exe. Hãy chọn tệp hoặc dán đường dẫn thật.')
+                with self.server.lock:
+                    if self.server.picker_active or self.server.preflight_inflight or self.server._active_job_locked():
+                        raise ValueError('Hãy chờ xử lý xong trước khi kiểm tra Gmsh')
+                if not Path(data['path']).is_absolute(): raise ValueError('Chọn đường dẫn Gmsh tuyệt đối')
+                report=inspect_executable(data['path'])
+                save_checked(self.server.gmsh_preferences,report)
+                return self.respond(report)
+            if path=='/api/job/stop': return self.respond(self.server.stop_job(data))
+            if path=='/api/comparison': return self.respond(self.server.start_comparison(data),202)
             if path=='/api/preflight': return self.respond(self.server.validate_form(data))
             if path=='/api/run':
-                if set(data)!={'preflight_id'}: raise ValueError('Run accepts only preflight_id')
-                return self.respond(self.server.start_job(data['preflight_id']),202)
+                if not isinstance(data,dict) or 'preflight_id' not in data or set(data)-{'preflight_id','request_id'}:
+                    raise ValueError('Run accepts preflight_id and optional request_id')
+                return self.respond(self.server.start_job(data['preflight_id'],data.get('request_id')),202)
             self.respond(dict(error='Not found'),404)
         except AccessError as error: self.respond(dict(error=str(error)),403)
         except Exception as error: self.respond(dict(error=str(error)),400)

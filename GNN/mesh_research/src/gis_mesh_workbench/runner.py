@@ -2,19 +2,24 @@
 import csv
 from datetime import datetime, timezone
 import json
+import math
 from pathlib import Path
 import time
 import uuid
 
 import jsonschema
 import rasterio
+from .raster_source import open_raster, raster_snapshots, assert_rasters_unchanged, snapshot, assert_unchanged, HASH_SCOPE
 from shapely.geometry import Polygon
 
 from .adapters import import_mesh, structured_grid, _json
 from .extraction import extract_attributes, _digest
 from .spatial import metric_crs
 from .gmsh_reference import inspect_preset, generate_reference
+from .gmsh_meshing import inspect_domain, generate as generate_gmsh
 from .indexed_extraction import extract_indexed, estimate, limits as indexed_limits, process_memory
+from .build_info import identity
+from .job_control import Cancelled, checkpoint, current, observe, finalize_manifest
 
 
 def write_json(path, value):
@@ -32,23 +37,61 @@ def effective_config(path):
     for field in ('raster_path', 'output_root'):
         if isinstance(config.get(field), str) and config[field]:
             config[field] = str((path.parent / config[field]).resolve())
+    if isinstance(config.get('resolution_reference'),dict) and config['resolution_reference'].get('path'):
+        config['resolution_reference']['path']=str((path.parent/config['resolution_reference']['path']).resolve())
     source = config.get('cell_source')
     if isinstance(source, dict) and isinstance(source.get('path'), str):
         source['path'] = str((path.parent / source['path']).resolve())
+    if isinstance(source,dict) and source.get('boundary_path'):
+        source['boundary_path']=str((path.parent/source['boundary_path']).resolve())
+    if isinstance(source,dict) and source.get('roi_raster_path'):
+        source['roi_raster_path']=str((path.parent/source['roi_raster_path']).resolve())
+    if isinstance(source,dict) and source.get('dem_raster_path'):
+        source['dem_raster_path']=str((path.parent/source['dem_raster_path']).resolve())
     config.setdefault('edge_subdivisions', 8)
-    if config.get('schema_version') == 'gis-workbench-run-config-v1':
+    if config.get('schema_version') in {'gis-workbench-run-config-v1','gis-workbench-run-config-v2'}:
         config['indexed_limits'] = indexed_limits(config.get('indexed_limits'))
     else:
         config.setdefault('max_pixels', 10000)
         config.setdefault('max_pairs', 1000000)
     if isinstance(source, dict):
-        source.setdefault('max_cells', 1000)
+        from .workload_limits import cell_cap
+        source.setdefault('max_cells', cell_cap(config))
     return config
 
 
 def validate_config(config):
-    schema = _json(Path(__file__).with_name('run-config-v1.schema.json'
-        if config.get('schema_version') == 'gis-workbench-run-config-v1' else 'run-config.schema.json'))
+    source=config.get('cell_source',{})
+    if config.get('schema_version')=='gis-workbench-run-config-v2' and source.get('kind')=='gmsh_generated':
+        if sum(key in source for key in ('extent','boundary_path','roi_raster_path'))!=1:
+            raise ValueError('Chỉ chọn một nguồn ROI: extent / SHP / raster')
+        if source.get('sizing')=='uniform':
+            if source.get('h_min_m')!=source.get('h_max_m'): raise ValueError('Uniform yêu cầu h_min = h_max: một kích thước mục tiêu h')
+            if any(key in source for key in ('dem_raster_path','dem_band','relief_radius_m')):
+                raise ValueError('Uniform không dùng DEM, band DEM hoặc bán kính relief')
+    if config.get('schema_version')=='gis-workbench-run-config-v2' and config.get('cell_source',{}).get('sizing') in {'relief','sf1_relief'} and not config['cell_source'].get('dem_raster_path'):
+        raise ValueError('DEM required for relief sizing; chọn DEM và band cao độ')
+    if config.get('schema_version')=='gis-workbench-run-config-v2' and source.get('sizing')=='sf1_relief':
+        if source.get('dem_value_units')!='m':
+            raise ValueError('SF-1 yêu cầu khai báo giá trị cao độ DEM theo mét')
+        if source.get('h_min_m')!=250 or source.get('h_max_m')!=1000:
+            raise ValueError('Hồ sơ SF-1 yêu cầu h_min=250 m, h_max=1000 m')
+        if 'sf1_scale' not in source:
+            raise ValueError('SF-1 yêu cầu khai báo sf1_scale trong khoảng 0,25–4')
+        scale=source['sf1_scale']
+        if isinstance(scale,bool) or not isinstance(scale,(int,float)) or not math.isfinite(scale) or not .25<=scale<=4:
+            raise ValueError('Hệ số SF-1 phải hữu hạn trong khoảng 0,25–4')
+    schema_name={'gis-workbench-run-config-v1':'run-config-v1.schema.json','gis-workbench-run-config-v2':'run-config-v2.schema.json'}.get(config.get('schema_version'),'run-config.schema.json')
+    schema = _json(Path(__file__).with_name(schema_name))
+    if config.get('schema_version') == 'gis-workbench-run-config-v1':
+        schema['properties']['operation']={'enum':['mesh_only','extract']}
+        if config.get('operation')=='mesh_only':
+            schema['required'].remove('raster_path')
+        schema['properties']['cell_source']['oneOf'].append(dict(type='object',additionalProperties=False,
+            required=['kind','path'],properties=dict(kind={'const':'frozen_cells'},
+            path={'type':'string','minLength':1},max_cells={'type':'integer','minimum':1,'maximum':1000})))
+        schema['properties']['cell_source']['oneOf'][0]['properties']['roi_raster_path']={'type':'string','minLength':1}
+        schema['properties']['cell_source']['oneOf'][3]['properties']['roi_raster_path']={'type':'string','minLength':1}
     errors = sorted(jsonschema.Draft202012Validator(schema).iter_errors(config), key=lambda e: str(e.path))
     if errors:
         raise ValueError('; '.join(f'{".".join(map(str,e.path)) or "config"}: {e.message}' for e in errors))
@@ -56,8 +99,18 @@ def validate_config(config):
 
 def prepare_cells(config):
     source = config['cell_source']
+    if source['kind'] == 'frozen_cells':
+        from .mesh_workflow import read_frozen
+        return read_frozen(source['path'],config['analysis_crs'],source['max_cells'],source.get('geometry_digest'))
     if source['kind'] == 'mesh_artifact':
         return import_mesh(source['path'], analysis_crs=config['analysis_crs'], max_cells=source['max_cells'])
+    if source.get('roi_raster_path'):
+        from .gmsh_meshing import mesh_domain
+        from shapely.geometry import box
+        domain,_=mesh_domain(config)
+        if domain.symmetric_difference(box(*domain.bounds)).area>max(1e-8,domain.area*1e-10):
+            raise ValueError('ROI is not axis-aligned; use Gmsh to preserve footprint')
+        if list(source['extent'])!=list(domain.bounds): raise ValueError('Structured extent does not match ROI footprint')
     return structured_grid(extent=source['extent'], cell_width_m=source['cell_width_m'],
         cell_height_m=source['cell_height_m'], boundary_policy=source['boundary_policy'],
         analysis_crs=config['analysis_crs'], max_cells=source['max_cells'])
@@ -70,6 +123,16 @@ def preflight(config):
     try:
         validate_config(config)
         target = metric_crs(config['analysis_crs'])
+        if config.get('operation')=='mesh_only':
+            if config['cell_source']['kind']=='gmsh_generated':
+                report.update(inspect_domain(config))
+            else:
+                cells=prepare_cells(config)
+                report.update(cell_count=len(cells.cells),analysis_crs_wkt=target.to_wkt())
+            report.update(status='pass',pixel_count=0,operation='mesh_only')
+            from .meshing_parameters import request_summary
+            report['meshing_request']=request_summary(config,report.get('boundary'))
+            return report,cells
         report.update(analysis_crs_wkt=target.to_wkt(), semantics=config['semantics'],
                       value_units=config['value_units'], raster_path=config['raster_path'],
                       limits=(config['indexed_limits'] if config.get('extraction_engine') == 'indexed_windowed_v1'
@@ -77,13 +140,17 @@ def preflight(config):
         if config['cell_source']['kind'] == 'gmsh_reference':
             _, preset_report = inspect_preset(config['analysis_crs'],config['cell_source']['preset'])
             report.update(preset_report,coordinate_units='m')
+        elif config['cell_source']['kind'] == 'gmsh_generated':
+            report.update(inspect_domain(config))
         else:
             cells = prepare_cells(config)
-            report.update(cell_count=len(cells.cells), cell_crs_wkt=cells.crs_wkt, coordinate_units='m')
-        with rasterio.open(config['raster_path'], 'r') as src:
+            report.update(cell_count=len(cells.cells), cell_crs_wkt=cells.crs_wkt, coordinate_units='m',geometry_digest=cells.provenance.get('geometry_digest'))
+        with open_raster(config['raster_path']) as src:
             band = config['band']
             if src.crs is None:
                 raise ValueError('raster CRS missing')
+            from .raster_resolution import describe
+            report['raster_resolution']=describe(src,config['analysis_crs'],band)
             if not 1 <= band <= src.count:
                 raise ValueError('band out of range')
             nodata = src.nodatavals[band-1]
@@ -107,28 +174,36 @@ def preflight(config):
                 analysis_crs=config['analysis_crs'],band=config['band'],hard_limits=config['indexed_limits'])
         report['status'] = 'pass'
     except Exception as error:
+        report['status']='fail'
         report['errors'].append(str(error))
     return report, cells
 
 
 def preview(path, cells):
+    checkpoint()
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     fig, ax = plt.subplots(figsize=(9,6), facecolor='#fffafa')
-    for cell in cells:
-        polygon = Polygon(cell.xy)
-        x,y = polygon.exterior.xy
-        ax.fill(x,y,facecolor='#fff0f3',edgecolor='#dc244c',linewidth=.7)
-        ax.plot(polygon.centroid.x, polygon.centroid.y, '.',color='#b91537',markersize=3)
+    from matplotlib.collections import PolyCollection
+    polygons = [Polygon(cell.xy) for cell in cells]
+    ax.add_collection(PolyCollection([cell.xy for cell in cells],facecolors='#fff0f3',
+                                    edgecolors='#dc244c',linewidths=.7))
+    ax.scatter([p.centroid.x for p in polygons],[p.centroid.y for p in polygons],
+               s=3,c='#b91537')
+    ax.autoscale_view()
     ax.set_aspect('equal'); ax.set_title(f'Mesh Cherry · {len(cells)} cells · centres shown')
     ax.set_xlabel('X (m)'); ax.set_ylabel('Y (m)')
-    fig.tight_layout(); fig.savefig(path,dpi=140); plt.close(fig)
+    try:
+        fig.tight_layout(); fig.savefig(path,dpi=140)
+    finally: plt.close(fig)
+    checkpoint()
 
 
 def run(config_path, progress=None):
     """Returns status/output/error. Parse errors raise; later errors retain run."""
     def emit(stage):
+        observe(stage)
         if progress is not None:
             try:
                 progress(stage)
@@ -138,6 +213,9 @@ def run(config_path, progress=None):
     config_path = Path(config_path).resolve()
     config_hash = _digest(config_path)
     config = effective_config(config_path)
+    if config.get('operation')=='mesh_only':
+        from .mesh_workflow import run_mesh
+        return run_mesh(config_path,config,progress)
     output_root = config.get('output_root')
     if not isinstance(output_root, str) or not output_root:
         raise ValueError('no trustworthy output_root; no diagnostic run created')
@@ -145,17 +223,25 @@ def run(config_path, progress=None):
     # Never write output into a source directory. Reject source ancestors too.
     sources = [config_path, Path(config.get('raster_path',''))]
     if isinstance(config.get('cell_source'), dict) and config['cell_source'].get('path'):
-        sources.append(Path(config['cell_source']['path']))
+        cell_path=Path(config['cell_source']['path'])
+        if config['cell_source']['kind']=='frozen_cells':
+            if root==cell_path.parent.resolve(): raise ValueError('output_root must not be frozen mesh directory')
+        else: sources.append(cell_path)
+    if config.get('cell_source',{}).get('boundary_path'):
+        from .boundary import bundle_paths
+        sources.extend(bundle_paths(config['cell_source']['boundary_path']))
     if any(root == p.parent.resolve() or root in p.resolve().parents for p in sources):
         raise ValueError('output_root must be isolated from source paths')
     run_id = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ') + '-' + uuid.uuid4().hex[:8]
     output = root / run_id
     output.mkdir(parents=True, exist_ok=False)
+    if current() is not None: current().output=output
     started = time.perf_counter()
     manifest = dict(schema_version='gis-workbench-run-manifest-v0', run_id=run_id,
+        application_build=identity(),
         status='fail', config_path=str(config_path), config_sha256=config_hash,
-        started_at=datetime.now(timezone.utc).isoformat(), hash_scope='main_raster_file_only',
-        limitations=['raster sidecars not hashed','datum accuracy unverified','small reference kernel'])
+        started_at=datetime.now(timezone.utc).isoformat(), hash_scope=HASH_SCOPE,
+        limitations=['recognized same-dataset companions only','datum accuracy unverified','small reference kernel'])
     if config.get('extraction_engine') == 'indexed_windowed_v1':
         manifest['limitations'][-1] = 'bounded indexed/windowed engine; hard ceilings apply'
     stage = 'config'
@@ -163,6 +249,8 @@ def run(config_path, progress=None):
     try:
         write_json(output/'config.json',config)
         validate_config(config)
+        raster_inputs=raster_snapshots(config)
+        manifest['raster_inputs']=raster_inputs
         contract = dict(run_name=config['run_name'], cell_source_kind=config['cell_source']['kind'],
                         semantics=config['semantics'], value_units=config['value_units'],
                         effective_limits=(dict(**config['indexed_limits'],max_cells=config['cell_source']['max_cells'],
@@ -195,6 +283,13 @@ def run(config_path, progress=None):
             elif (len(cells.cells)**2 > config['max_pairs']
                     or report['pixel_count']*len(cells.cells) > config['max_pairs']):
                 raise ValueError('generated cells exceed reference workload limits')
+        elif config['cell_source']['kind'] == 'gmsh_generated':
+            stage='meshing'; emit(stage)
+            cells, generator_provenance=generate_gmsh(config,output)
+            manifest['gmsh_generated']=generator_provenance
+            report['workload_estimate']=estimate(config['raster_path'],cells.cells,
+                analysis_crs=config['analysis_crs'],band=config['band'],hard_limits=config['indexed_limits'])
+            write_json(output/'preflight.json',report)
         stage = 'cells'
         emit(stage)
         geometry = [dict(cell_id=c.cell_id,kind=c.kind,xy=c.xy) for c in cells.cells]
@@ -209,8 +304,32 @@ def run(config_path, progress=None):
             analysis_crs=config['analysis_crs'],band=config['band'],semantics=config['semantics'],
             value_units=config['value_units'],edge_subdivisions=config['edge_subdivisions'],
             **extractor_options)
+        if config['cell_source']['kind']=='frozen_cells':
+            from .mesh_workflow import geometry_digest, read_frozen
+            accepted=cells.provenance['geometry_digest']
+            read_frozen(config['cell_source']['path'],config['analysis_crs'],config['cell_source']['max_cells'],accepted)
+            if geometry_digest(cells.cells,cells.crs_wkt)!=accepted: raise ValueError('Frozen geometry changed during extraction')
+            if _digest(Path(config['cell_source']['path']))!=cells.provenance['source_sha256']: raise ValueError('Frozen mesh changed during extraction')
+            manifest['geometry_digest']=accepted
+            emitted=_json(output/'cells.json')
+            from .extraction import Cell
+            emitted_cells=tuple(Cell(r['cell_id'],r['kind'],tuple(tuple(p) for p in r['xy'])) for r in emitted['cells'])
+            if geometry_digest(emitted_cells,emitted['crs_wkt'])!=accepted: raise ValueError('Serialized mesh geometry digest mismatch')
+        assert_rasters_unchanged(raster_inputs)
         if _digest(config_path) != config_hash:
             raise ValueError('config changed during run')
+        if config['cell_source']['kind']=='gmsh_generated':
+            # ROI, DEM and extraction may deliberately be different datasets.
+            # Each dataset was independently snapshotted and rechecked above.
+            sizing=manifest['gmsh_generated']['size_field']
+            if (sizing.get('dem_source_path')==str(Path(config['raster_path']).resolve())
+                    and sizing.get('source_sha256')!=result['provenance']['source_sha256']):
+                raise ValueError('DEM changed between sizing and extraction')
+            boundary=manifest['gmsh_generated'].get('boundary')
+            if config['cell_source'].get('boundary_path'):
+                from .boundary import bundle_paths
+                if {p.name:_digest(p) for p in bundle_paths(config['cell_source']['boundary_path'])}!=boundary['files_sha256']:
+                    raise ValueError('SHP bundle changed between meshing and extraction')
         manifest.update(adapter_provenance=dict(cells.provenance), extraction_provenance=result['provenance'])
         if 'engine_evidence' in result['qa']:
             manifest['engine_evidence'] = result['qa']['engine_evidence']
@@ -223,6 +342,7 @@ def run(config_path, progress=None):
             writer = csv.DictWriter(stream,fieldnames=fields,extrasaction='ignore')
             writer.writeheader()
             for record in result['cells']:
+                checkpoint()
                 row = dict(record)
                 if 'class_fractions' in row:
                     row['class_fractions'] = json.dumps(row['class_fractions'],sort_keys=True,allow_nan=False)
@@ -240,20 +360,26 @@ def run(config_path, progress=None):
                     max(p[0] for c in cells.cells for p in c.xy),
                     max(p[1] for c in cells.cells for p in c.xy)],
             extraction_qa=result['qa'])
+        if manifest.get('geometry_digest'): qa['geometry_digest']=manifest['geometry_digest']
         write_json(output/'qa.json',qa)
+        assert_rasters_unchanged(raster_inputs)
+        if _digest(config_path)!=config_hash:raise ValueError('config changed during serialization')
         manifest['status'] = 'pass'
+    except Cancelled as error:
+        manifest.update(status='cancelled',cancelled_stage=stage,error=str(error))
+        write_json(output/'qa.json',dict(status='cancelled',cancelled_stage=stage,error=str(error)))
     except Exception as error:
         manifest.update(failed_stage=stage,error=str(error))
         write_json(output/'preflight.json',report)
         write_json(output/'qa.json',dict(status='fail',failed_stage=stage,error=str(error)))
     manifest.update(finished_at=datetime.now(timezone.utc).isoformat(),
                     runtime_seconds=time.perf_counter()-started,
-                    peak_memory_status='not_measured',
-                    artifact_hashes={p.relative_to(output).as_posix():_digest(p)
-                                     for p in output.rglob('*') if p.is_file()})
+                    peak_memory_status='not_measured')
     if config.get('extraction_engine') == 'indexed_windowed_v1':
         manifest['workbench_memory_metric'] = process_memory()
         manifest['peak_memory_status'] = manifest['workbench_memory_metric']['status']
-    write_json(output/'manifest.json',manifest)
-    emit('done' if manifest['status'] == 'pass' else 'failed')
+    finalize_manifest(output,manifest)
+    if progress is not None:
+        try: progress('done' if manifest['status']=='pass' else manifest['status'])
+        except Exception: pass
     return dict(status=manifest['status'],output=str(output),error=manifest.get('error'))

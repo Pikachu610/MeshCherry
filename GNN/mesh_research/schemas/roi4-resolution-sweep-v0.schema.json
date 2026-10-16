@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "roi4-resolution-sweep-v0",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "matrix_id",
+    "created_at",
+    "source_config",
+    "source_config_sha256",
+    "status",
+    "semantic_evidence",
+    "pareto",
+    "claims",
+    "limitations",
+    "runs"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "roi4-resolution-sweep-v0"},
+    "matrix_id": {"type": "string"},
+    "created_at": {"type": "string"},
+    "source_config": {"type": "string"},
+    "source_config_sha256": {"type": "string"},
+    "status": {"type": "string"},
+    "semantic_evidence": {
+      "type": "object",
+      "required": ["status", "audit"],
+      "properties": {
+        "status": {"type": "string"},
+        "audit": {"type": "array", "items": {"type": "object"}}
+      }
+    },
+    "pareto": {
+      "type": "object",
+      "required": ["scope", "objectives", "non_dominated_refinements", "statement"],
+      "properties": {
+        "scope": {"type": "string"},
+        "objectives": {"type": "array", "items": {"type": "string"}},
+        "non_dominated_refinements": {"type": "array", "items": {"type": "string"}},
+        "statement": {"type": "string"}
+      }
+    },
+    "claims": {
+      "type": "object",
+      "required": ["hydrological_routing_validity", "watershed_divide_verified", "outlet_verified"]
+    },
+    "limitations": {"type": "array", "items": {"type": "string"}},
+    "runs": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "object",
+        "required": [
+          "domain",
+          "refinement",
+          "target_edge",
+          "status",
+          "run_directory",
+          "cell_count",
+          "physical_interface_count",
+          "directed_edge_count",
+          "quality",
+          "wall_time_seconds",
+          "peak_rss_bytes",
+          "hard_gates",
+          "boundary",
+          "remapping"
+        ],
+        "properties": {
+          "domain": {"type": "string"},
+          "refinement": {"type": "string"},
+          "target_edge": {"type": "number"},
+          "status": {"type": "string"},
+          "run_directory": {"type": "string"},
+          "cell_count": {"type": "integer"},
+          "physical_interface_count": {"type": "integer"},
+          "directed_edge_count": {"type": "integer"},
+          "quality": {"type": "object"},
+          "wall_time_seconds": {"type": "number"},
+          "peak_rss_bytes": {"type": "integer"},
+          "hard_gates": {"type": "array", "items": {"type": "object"}},
+          "boundary": {"type": "object"},
+          "remapping": {"type": "object"}
+        }
+      }
+    }
+  }
+}

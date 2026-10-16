@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dem-adaptive-manifest-v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "status", "config_path", "config_sha256", "python", "platform", "terrain_sources", "boundary_source_sha256", "source_bundle_immutable", "phase1_modified", "dependency_versions", "implementation_hashes", "artifact_hashes"],
+  "properties": {
+    "schema_version": {"const": "dem-adaptive-manifest-v1"},
+    "run_id": {"type": "string"},
+    "status": {"enum": ["complete", "fail"]},
+    "config_path": {"type": "string"},
+    "config_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "python": {"type": "string"},
+    "platform": {"type": "string"},
+    "terrain_sources": {"type": "array", "minItems": 3},
+    "boundary_source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source_bundle_immutable": {"const": true},
+    "phase1_modified": {"const": false},
+    "dependency_versions": {"type": "object"},
+    "implementation_hashes": {"type": "object", "minProperties": 1},
+    "artifact_hashes": {"type": "object", "minProperties": 1}
+  }
+}

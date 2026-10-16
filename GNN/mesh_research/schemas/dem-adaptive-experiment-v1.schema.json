@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dem-adaptive-experiment-v1",
+  "type": "object",
+  "required": ["schema_version", "generator", "domain", "terrain_bundle", "experiment", "historical_uniform_500m", "output_root"],
+  "properties": {
+    "schema_version": {"const": "dem-adaptive-experiment-v1"},
+    "generator": {"type": "object"},
+    "domain": {"type": "object"},
+    "terrain_bundle": {"type": "string"},
+    "experiment": {
+      "type": "object",
+      "required": ["predictor_windows_m", "normalization_percentiles", "high_complexity_percentile", "h_bounds_m", "gammas", "gradation_ratios", "gradation_reference_distance_m", "control_factor", "target_cells", "accepted_cell_range", "scale_range", "max_calibration_attempts", "minimum_angle_degrees", "maximum_global_degradation_fraction", "minimum_high_complexity_benefit_pct", "benefit_tie_window_pct", "stage1_variants", "support_area_tolerance"],
+      "properties": {
+        "predictor_windows_m": {"const": [150, 450]},
+        "normalization_percentiles": {"const": [25, 95]},
+        "high_complexity_percentile": {"const": 75},
+        "h_bounds_m": {"const": [250, 1000]},
+        "gammas": {"const": [0.5, 1.0, 2.0]},
+        "gradation_ratios": {"const": [1.2, 1.3, 1.5]},
+        "gradation_reference_distance_m": {"const": 250},
+        "control_factor": {"const": 4},
+        "target_cells": {"const": 13515},
+        "accepted_cell_range": {"const": [12840, 14190]},
+        "scale_range": {"const": [0.25, 4.0]},
+        "max_calibration_attempts": {"const": 12},
+        "minimum_angle_degrees": {"const": 25},
+        "maximum_global_degradation_fraction": {"const": 0.05},
+        "minimum_high_complexity_benefit_pct": {"const": 10},
+        "benefit_tie_window_pct": {"const": 2},
+        "stage1_variants": {"const": ["slope", "relief", "combined"]},
+        "support_area_tolerance": {"type": "object", "required": ["absolute_m2", "relative"]}
+      },
+      "additionalProperties": false
+    },
+    "historical_uniform_500m": {"type": "string"},
+    "output_root": {"type": "string"}
+  }
+}

@@ -9,6 +9,7 @@ import numpy as np
 
 from .extraction import Cell, _cells, _digest
 from .spatial import metric_crs
+from .workload_limits import MAX_MESH_BYTES, MAX_MESH_CELLS
 
 
 @dataclass(frozen=True)
@@ -33,8 +34,8 @@ def import_mesh(path, *, analysis_crs, max_cells=1000):
     checked when present. Standalone artifacts remain provenance-unverified.
     """
     path = Path(path).resolve()
-    if path.stat().st_size > 16 * 1024 * 1024:
-        raise ValueError('mesh input exceeds 16 MiB reference limit')
+    if path.stat().st_size > MAX_MESH_BYTES:
+        raise ValueError('mesh input exceeds 64 MiB')
     before = _digest(path)
     mesh = _json(path)
     if mesh.get('schema_version') != 'mesh-artifact-v0':
@@ -56,7 +57,7 @@ def import_mesh(path, *, analysis_crs, max_cells=1000):
     triangles = mesh.get('triangles')
     if (vertices.ndim != 2 or vertices.shape[1] != 2 or not np.isfinite(vertices).all()
             or not isinstance(triangles, list) or not 0 < len(triangles) <= max_cells
-            or len(triangles)**2 > 1000000):
+            or len(triangles) > MAX_MESH_CELLS):
         raise ValueError('invalid vertices or cell workload limit')
     cells = []
     for index, triangle in enumerate(triangles):

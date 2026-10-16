@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mesh-matrix-config-v0",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_name",
+    "generator",
+    "domains",
+    "refinements",
+    "crs",
+    "coordinate_units",
+    "state_units",
+    "output_root"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "mesh-matrix-config-v0"},
+    "matrix_kind": {"type": "string"},
+    "run_name": {"type": "string"},
+    "generator": {"type": "object"},
+    "domains": {"type": "array", "minItems": 1, "items": {"type": "object"}},
+    "refinements": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "target_edge"],
+        "properties": {
+          "name": {"type": "string"},
+          "target_edge": {"type": "number"}
+        }
+      }
+    },
+    "crs": {"type": "string"},
+    "coordinate_units": {"type": "string"},
+    "state_units": {"type": "object"},
+    "semantic_evidence": {
+      "type": "object",
+      "properties": {
+        "status": {"type": "string"},
+        "audit": {"type": "array", "items": {"type": "object"}}
+      }
+    },
+    "output_root": {"type": "string"}
+  }
+}

@@ -1,4 +1,105 @@
-# Mesh Cherry — GIS mesh workbench v1
+# Mesh Cherry — GIS mesh workbench
+
+## Hành vi hiện tại — ứng viên 2.9.1
+
+Quy trình: chọn miền ROI → chọn cách và kích thước lưới → kiểm tra cấu hình →
+tạo và xem chất lượng lưới → tùy chọn extract raster lên các ô đã lưu.
+ROI nhận biên ngoài GeoTIFF/ASC, miền chữ nhật hoặc bộ `.shp/.shx/.dbf/.prj`.
+Lưới đều trên SHP/chữ nhật không cần raster. Relief cần DEM và band cao độ riêng;
+raster tham chiếu độ phân giải chỉ cung cấp thông tin cho người chọn kích thước.
+
+Menu **Công cụ** có so sánh lưới vuông–tam giác và hồ sơ phương pháp GNN/SF-1.
+Comparison dùng lưới tam giác đã chấp nhận, cắt lưới vuông theo đúng union của
+các tam giác (giữ lỗ, tách phần rời thành các ô), cùng raster/band/miền hợp lệ.
+Số node là số ô; chênh lệch node = tam giác − vuông. Phần trăm giảm có dấu,
+ngân sách lưới vuông phụ thuộc cạnh ô do người dùng chọn.
+Intensive báo RMSE/MAE/bias tích phân sai lệch giá trị ô và pixel trên diện tích
+giao. Đây là lỗi biểu diễn piecewise-constant, không phải RMSE của raster được
+dựng ngược bằng trung bình pixel. Extensive báo bảo toàn tổng; categorical báo
+bảo toàn tỷ phần lớp toàn miền và mức đồng thuận lớp đại diện theo diện tích:
+tổng diện tích lớp chiếm ưu thế trong mỗi ô / tổng diện tích hợp lệ. Chỉ số này
+đo khả năng biểu diễn raster bằng một lớp đại diện cho mỗi ô. Bảng xem trước
+giới hạn 100 lớp; báo cáo JSON giữ đủ các lớp.
+Comparison chạy nền có Dừng, phục hồi theo request ID và report JSON riêng.
+
+Hồ sơ **GNN · biến thiên địa hình SF-1** dùng DEM north-up vuông 30 m, cùng CRS
+mét với ROI, tối đa 2 triệu pixel, cao độ được khai báo theo mét. Hai cửa sổ
+5×5 và 15×15 (toàn bề rộng 150/450 m), chuẩn hóa riêng P25/P95 rồi lấy max.
+h250–1000 m/gamma2/gradation1,5 tại250m/control120m được giữ theo nghiên cứu.
+Scale0,25–4 bắt buộc được khai báo trong cấu hình; UI điền sẵn1 để người dùng
+xem và điều chỉnh. Hệ số được gửi nguyên giá trị, không hiệu chỉnh theo ngân sách node.
+ROI gốc không giản lược. Trường control khớp artifact GNN khi dùng đúng input,
+mask và scale nghiên cứu; điều này không tái thực hiện calibration/mesh cũ.
+Relief33×33 một cửa sổ vẫn là phương pháp thử nghiệm riêng, không gắn nhãn SF-1.
+
+Config v2 cho Gmsh, mesh nhập và frozen cells có giới hạn tính toán 100.000 ô;
+lưới chữ nhật và config cũ giữ giới hạn 1.000 ô. Riêng lưới vuông đối chiếu trong
+Comparison được giới hạn100.000 ô và chịu thêm các trần pixel/cặp giao. Màn hình
+SVG dùng path theo nhóm trên2.000 ô, vẫn giữ đầy đủ hình học/tương tác tới trần
+mesh100.000 ô. Kiểm thử logic100.000 ô không xác nhận hiệu năng cửa sổ máy sạch.
+
+GeoTIFF/ASC và các file đi kèm được nhận diện bằng SHA-256, kiểm tra trước/sau
+cho từng vai trò ROI, DEM, tham chiếu và extract. Thêm/xóa file đi kèm cũng làm
+run không đạt. CRS nguồn phải được khai báo; phép chuyển tọa độ khác với gán
+nhãn CRS. Cell dùng mặt phẳng projected metre, giữ nguyên ID/thứ tự đỉnh; CW/CCW
+đều hợp lệ cho extraction không sử dụng pháp tuyến. Cell suy biến hoặc chồng
+lấn diện tích bị từ chối. Union các record SHP có thể bỏ đường ranh nội bộ;
+không áp dụng phép đơn giản hóa biên nguồn.
+
+Phiên bản từ `_version.py` được dùng chung cho UI, bootstrap, build và manifest.
+Ảnh đầu vào là PNG Blob; giảm mẫu/stretch chỉ phục vụ xem trước. Kiểm thử chuẩn:
+`PYTHONPATH=src python -m unittest discover -s tests` và
+`node --test tests/workbench_ui_state.test.cjs`. Hướng dẫn build: `packaging/README.md`.
+
+Các mục dưới đây lưu lịch sử phát triển; các giới hạn cũ chỉ áp dụng cho mốc
+phiên bản ghi trong mục đó. Việc phát hành ứng viên mới còn phụ thuộc audit 20.
+
+## v2.2.1 — mốc lịch sử sau phản biện
+
+Danh sách gần đây chỉ trả ID, loại, tên và thời điểm; không trả đường dẫn tuyệt đối.
+Đường dẫn được trả sau khi người dùng bấm mở ID và backend kiểm tra lại tệp.
+Bổ sung test giới hạn 21 thành phần, >2.000 đỉnh, >100 records; mutation ngay
+trong Gmsh; và SHP EPSG:4326 → EPSG:32649 → Gmsh thật → extraction.
+144 discovered, 143 passed, 1 Windows symlink skip. EXE đã build rồi self-test
+chính xác binary đó với SHA trước/sau giống nhau. Giữ v2.2.0 bên cạnh, không ghi đè.
+Native Windows picker và clean-machine vẫn UNVERIFIED; chưa push Git.
+Đường dẫn hiện tại: `MeshCherry/MeshCherry-Desktop-v2.2.1/MeshCherry/MeshCherry.exe`.
+
+## v2.2.0 — mốc SHP và tệp gần đây (2026-10-03)
+
+Mẫu 10/30 chỉ hiển thị trong hướng dẫn; không có trong màn hình dữ liệu thông thường
+hoặc lịch sử. Đây là thay đổi UI, không phải cơ chế thu hồi quyền đọc fixture.
+Desktop lưu tối đa 10 đường dẫn GeoTIFF/mesh/SHP trong
+`%LOCALAPPDATA%/MeshCherry/recent-files.json`, không lưu nội dung hay token.
+Khi khởi động, lịch sử không cấp quyền đọc. Chỉ bấm một ID gần đây mới kiểm tra lại
+định dạng/tệp và cấp quyền đúng input/bộ SHP; không cấp quyền thư mục cha.
+Mọi lần mở lại làm mất preflight cũ. Xóa lịch sử không xóa dữ liệu gốc.
+
+`gmsh_generated` nhận thêm `boundary_path` tùy chọn. SHP chỉ xác định miền;
+GeoTIFF vẫn là nguồn thuộc tính và DEM sizing. Chọn `.shp` bằng hộp Windows;
+tự tìm `.shx/.dbf/.prj` cùng tên. Bốn tệp bắt buộc, hash riêng và hash bộ tệp.
+Chỉ Polygon 2D, không tự sửa ring/geometry hoặc đơn giản hóa. Tối đa 100 records,
+2.000 đỉnh nguồn, 200 rings/record, 20 thành phần, 16 MiB/component (.prj 64 KiB).
+Hợp các polygon để tạo miền; giữ lỗ. CRS lấy từ .prj, không relabel.
+Đổi CRS bằng GIS X,Y, chia mỗi cạnh nguồn thành 8 đoạn tuyến tính trước chuyển;
+cạnh trong cùng CRS không đổi. Đây là xấp xỉ, không chứng minh accuracy datum.
+Miền vượt kinh tuyến đổi ngày bị từ chối. CRS tính toán phải projected metre.
+
+Gmsh nhận các Curve Loop/Plane Surface thật, không thay polygon bằng bbox.
+QA đối chiếu union tam giác với miền bằng diện tích symmetric difference;
+`meshing/domain-boundary.json` giữ hình học đã chuyển CRS. Relief vẫn control
+33×33, nhưng loại điểm ngoài polygon/trong lỗ khỏi relief và p25/p95.
+Coverage control báo riêng trên miền và toàn control grid; không nhầm hai mẫu số.
+Hash bộ SHP được kiểm sau meshing và sau extraction. Raster hash vẫn riêng
+`main_raster_file_only`; SHP không biến thành chứng nhận lưu vực/thủy văn.
+
+EXE thử: `MeshCherry/MeshCherry-Desktop-v2.2.0/MeshCherry/MeshCherry.exe` từ root
+SecondPro. Bản cũ giữ nguyên. Kiểm thử tự động: 138 discovered, 137 passed,
+1 Windows symlink skip; frozen self-test gồm Gmsh relief 38 ô và SHP có lỗ 46 ô.
+Chưa nghiệm thu hộp chọn Windows trên EXE; chưa publish Git.
+
+Các mục dưới là lịch sử các mốc trước; giới hạn rectangle-only đã được mở rộng
+bởi mục v2.2.0 này, không thay đổi pipeline nghiên cứu SF-1/Phase 1.
 
 ## Desktop và hướng dẫn cho người mới — đang nghiệm thu
 
@@ -20,12 +121,14 @@ Chỉ lưu `tutorial_version_seen` trong `%LOCALAPPDATA%/MeshCherry/tutorial.jso
 không lưu token, dữ liệu hay đường dẫn raster vào preference. Browser/debug
 không ghi preference này mặc định và hiển thị welcome mỗi phiên mới.
 
-Chưa có EXE/installer. Desktop source launcher không chứng minh rằng một bản
-EXE độc lập đã hoạt động. Các phép tính extraction, CRS và giới hạn v1 giữ nguyên.
+Đã có bản EXE portable thử cục bộ v2.1 với self-test backend đạt. Điều này chưa
+chứng minh tương tác cửa sổ native đầy đủ hoặc tương thích máy Windows sạch.
+Các phép tính extraction, CRS và giới hạn v1 giữ nguyên.
 
 Ứng dụng cục bộ có giao diện đỏ/trắng để tạo structured grid, nhập mesh tam
-giác đã có, chạy một preset Gmsh tham chiếu và trích thuộc tính cho **ô đã có
-hình học**. Không phải công cụ chia thích nghi DEM/polygon GIS tổng quát.
+giác đã có, hoặc gọi Gmsh bên ngoài tạo tam giác mới trên miền chữ nhật hoặc
+SHP Polygon 2D trong giới hạn v2.2, rồi trích thuộc tính cho **ô đã có hình học**.
+Hình học polygon hợp lệ không xác nhận miền đó là lưu vực.
 Package riêng nằm dưới mesh_research theo ADR 0006, không thay đổi module SF-1.
 
 Bản v1 bounded/reference được ChatGPT phản biện và chấp nhận ngày 2026-10-02,
@@ -174,7 +277,47 @@ $env:PYTHONPATH = "src"
 Demo kiểm SHA-256 DEM hiện tại so với nguồn retained trước khi chạy và sau khi
 extract; dùng bốn ô 300 m trong ROI vuông 600 m, không phải benchmark toàn ROI4.
 Manifest/QA ghi window/pixel/pair counters, thời gian, giới hạn và metric bộ nhớ.
-05A approved C2C iteration 7. Chưa arbitrary polygon/Gmsh DEM-adaptive trong ứng dụng.
+Tại mốc 05A: C2C iteration 7 approved; lúc ấy chưa hỗ trợ polygon trong ứng dụng.
+SHP bounded được bổ sung ở ticket 11, không thay đổi kernel indexed.
+
+## Gmsh tạo mới trên miền người dùng — mốc v2.1.x, ticket 10
+
+Mục này mô tả phạm vi ban đầu v2.1.x. Ticket 11 mở rộng sang SHP có lỗ;
+xem mục v2.2 ở đầu tài liệu cho hợp đồng hiện tại. Nghiệm thu native vẫn chưa đóng.
+
+`cell_source.kind=gmsh_generated` độc lập với preset `gmsh_reference` cũ.
+Người dùng cài/giải nén Gmsh, dán đường dẫn tuyệt đối `gmsh.exe`, kiểm tra và
+lưu đường dẫn trong workspace. Desktop mở hộp chọn Windows và cấp quyền đúng
+tệp đã chọn; browser/debug chỉ duyệt roots được phép. Không cấp quyền đọc toàn
+ổ đĩa. Preflight kiểm tra lại executable mỗi lần, không
+tin đường dẫn đã lưu. Giao diện nhận 4.x; đã thử thực tế với 4.15.2. Phiên bản
+và SHA-256 chỉ ghi provenance/độ ổn định, không chứng minh nguồn chính thức.
+
+Tại v2.1.x, miền chỉ là chữ nhật X/Y trong CRS projected metre. Hai lựa chọn: kích thước đều,
+hoặc local relief DEM thử nghiệm. Relief tính trên control raster 33 x 33
+(nearest chỉ cho size field), max-min trong cửa sổ, chuẩn hóa p25/p95 và gamma 2,
+rồi chuyển sang target size. Thiếu DEM dùng h_max; relief hằng dùng h_max.
+Không có gradation limiter hiệu chỉnh SF-1, không gọi đây là cấu hình tối ưu.
+DEM số phức, scale/offset khác identity hoặc không có cao độ hợp lệ bị từ chối.
+
+`.geo` đặt rõ `Mesh.MeshSizeFactor=1`, PostView/MathEval background sizing,
+MSH2.2 ASCII, tam giác bậc một và một luồng. Hệ số này tránh cấu hình Gmsh
+bên ngoài làm lệch kích thước. Heuristic diện tích/h_min chỉ chặn workload
+sớm; số ô thật được kiểm tra sau sinh mesh và tối đa 1000. Process timeout
+60 giây; không fallback ngầm. Parser kiểm section/count/node references,
+hình học dương/không chồng, và union phủ đúng miền chữ nhật của mốc v2.1.x.
+V2.2 đối chiếu với polygon thực khi chọn SHP, không đối chiếu bbox.
+
+Run giữ `meshing/domain.geo`, `size.pos` khi dùng relief, `gmsh.log`, actual
+`mesh.msh`, normalized `mesh.json`, `generator.json` và hash. Nút xuất MSH/mesh
+JSON xuất hiện với lượt Gmsh thành công. Extraction vẫn dùng **raster gốc**,
+không dùng control raster 33 x 33. Tâm ô hiển thị không phải đỉnh Gmsh, chưa
+phải graph dòng chảy; không suy ra lưu vực, routing hay chất lượng GNN.
+
+Thử địa hình nhân tạo biến thiên hiện cho 89 tam giác; median diện tích vùng
+gồ ghề nhỏ hơn vùng phẳng. Đây chỉ là bằng chứng phản ứng kích thước, không
+phải benchmark accuracy/calibration. Ticket chưa resolved và chưa phát hành
+Git đến khi hoàn tất phản biện và nghiệm thu UI/native.
 
 ## Mesh Cherry WebUI — 05B1 đã được chấp nhận, 05B2 đã kiểm thử browser
 
@@ -217,11 +360,29 @@ không dùng nó để khẳng định đã bắt đầy đủ mọi request c�
 ### Dùng thử
 
 1. Chọn GeoTIFF, kiểm tra CRS/band/NoData và khai báo semantics/đơn vị giá trị.
-2. Chọn lưới vuông/chữ nhật hoặc mesh JSON đã có. Gmsh chỉ dùng preset mẫu.
+2. Chọn lưới vuông/chữ nhật, tạo tam giác bằng Gmsh hoặc nhập mesh JSON đã có.
 3. Bấm **Kiểm tra cấu hình**, đọc giới hạn/coverage trước khi chạy.
 4. Bấm **Chạy & trích thuộc tính**, chọn tâm ô để xem giá trị và coverage.
 5. Tải CSV/JSON hoặc sao chép đường dẫn run chứa toàn bộ hồ sơ kiểm chứng.
 
 Một run chỉ được chạy một lần từ preflight ID; muốn chạy lại phải kiểm tra lại.
 Map không có basemap trực tuyến và không tự suy ra CRS của mesh thiếu metadata.
-Giới hạn 1.000 cell nghĩa là chưa nhập được toàn bộ mesh ROI4 13.515 ô.
+Giới hạn 1.000 cell là giới hạn lịch sử của các bản v2.4.x.
+
+## v2.5.0: ranh giới gốc nhiều đỉnh
+
+SHP không còn bị chặn ở 2.000 điểm và không áp dụng simplification. UI hiển
+thị số điểm nguồn, số điểm sau chuyển CRS và thông báo có thể chạy lâu khi
+có hơn 2.000 điểm. Trường hợp đổi CRS vẫn thêm điểm trên từng cạnh theo
+chính sách đã công bố; không bỏ điểm nguồn hoặc thay ranh giới bằng bbox.
+
+Config v2 cho Gmsh, mesh JSON và frozen-cell extract hỗ trợ tối đa 100.000 ô;
+lưới chữ nhật và các config v1 giữ ngân sách 1.000 ô. Kiểm tra chồng lấn dùng
+STRtree với cùng tiêu chí diện tích giao. Ngân sách hiện tại: tối đa 250.000
+điểm biên xử lý, MSH/cells JSON ≤ 64 MiB, 250.000 node, 600.000 phần tử MSH,
+5M cặp ứng viên kiểm tra chồng lấn; Gmsh tối đa 300 giây. Các ngưỡng này là
+giới hạn tài nguyên, không phải cam kết tốc độ hoặc chất lượng lưới.
+
+Chức năng vẫn đối chiếu union mesh với miền polygon thực, kiểm tra lỗ và
+giữ hash tệp đầu vào. Không suy ra độ chính xác thủy văn từ ranh giới nhiều
+đỉnh. Dữ liệu thử `original_boundary_2206` là miền nhân tạo dùng kiểm thử.

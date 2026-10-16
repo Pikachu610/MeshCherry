@@ -12,6 +12,21 @@ from gis_mesh_workbench.extraction import extract_attributes
 
 
 class DesktopTests(unittest.TestCase):
+    def test_native_picker_uses_windows_dialog_filters_and_cancel(self):
+        with tempfile.TemporaryDirectory() as directory:
+            server=WorkbenchServer(directory); view=MagicMock()
+            view.create_window.return_value.create_file_dialog.return_value=None
+            def start(**kwargs):
+                self.assertEqual(server.choose_native({'kind':'raster'}),{'cancelled':True})
+                args=view.create_window.return_value.create_file_dialog.call_args
+                self.assertEqual(args.args[0],view.FileDialog.OPEN)
+                self.assertEqual(args.kwargs,dict(allow_multiple=False,file_types=('Raster GeoTIFF / ASC (*.tif;*.tiff;*.asc)',)))
+                server.choose_native({'kind':'output'})
+                self.assertEqual(view.create_window.return_value.create_file_dialog.call_args.args[0],view.FileDialog.FOLDER)
+            view.start.side_effect=start
+            with patch('gis_mesh_workbench.desktop.WorkbenchServer',return_value=server), patch('gis_mesh_workbench.desktop._invoke_dialog',side_effect=lambda callback:callback()):
+                launch(directory,webview_module=view)
+
     def test_frozen_gmsh_fails_explicitly(self):
         from gis_mesh_workbench.gmsh_reference import inspect_preset
         with patch('sys.frozen', True, create=True):
@@ -32,6 +47,9 @@ class DesktopTests(unittest.TestCase):
                 server.jobs['test'] = {'status': 'running'}
                 self.assertIs(event.callback(), False)
                 server.jobs['test']['status'] = 'pass'
+                server.picker_active=True
+                self.assertIs(event.callback(),False)
+                server.picker_active=False
                 self.assertIsNone(event.callback())
             view.start.side_effect = start
             with patch('gis_mesh_workbench.desktop.WorkbenchServer', return_value=server):
@@ -55,6 +73,7 @@ class DesktopTests(unittest.TestCase):
             self.assertEqual(view.start.call_args.kwargs['gui'], 'edgechromium')
             self.assertTrue(view.start.call_args.kwargs['private_mode'])
             self.assertEqual(servers[0].socket.fileno(), -1)
+            self.assertEqual(servers[0].gmsh_preferences, Path(directory)/'gmsh.json')
 
     def test_failure_still_shuts_down(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -64,6 +83,24 @@ class DesktopTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'renderer failed'):
                     launch(directory, webview_module=view)
             self.assertEqual(server.socket.fileno(), -1)
+
+    def test_launch_migrates_legacy_into_per_user_preferences(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); workspace=root/'release'; workspace.mkdir()
+            legacy=workspace/'.scratch/gis-mesh-workbench/gmsh.json'
+            legacy.parent.mkdir(parents=True)
+            saved=dict(executable=str(root/'tools/gmsh.exe'),version='4.15.2',executable_sha256='a'*64)
+            legacy.write_text(json.dumps(saved),encoding='utf-8')
+            def factory(**kwargs):
+                server=WorkbenchServer(**kwargs)
+                self.assertEqual(server.saved_gmsh(),saved)
+                return server
+            with patch('gis_mesh_workbench.desktop.WorkbenchServer',side_effect=factory), \
+                 patch('gis_mesh_workbench.gmsh_meshing.inspect_executable') as inspect:
+                launch(workspace,webview_module=MagicMock(),preferences=root/'profile/tutorial.json')
+                inspect.assert_not_called()
+            self.assertTrue(legacy.is_file())
+            self.assertEqual(json.loads((root/'profile/gmsh.json').read_text()),saved)
 
     def test_missing_dependency_opens_no_server(self):
         with patch.dict('sys.modules', {'webview': None}), patch('gis_mesh_workbench.desktop.WorkbenchServer') as factory:

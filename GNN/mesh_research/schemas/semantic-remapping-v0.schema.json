@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "semantic-remapping-v0",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "name",
+    "quantity_type",
+    "units",
+    "source_path",
+    "source_sha256",
+    "cell_coverage_fractions",
+    "comparison_raster"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "semantic-remapping-v0"},
+    "name": {"type": "string"},
+    "quantity_type": {"type": "string"},
+    "units": {"type": "string"},
+    "source_path": {"type": "string"},
+    "source_sha256": {"type": "string"},
+    "cell_coverage_fractions": {
+      "type": "array",
+      "items": {"type": "number"}
+    },
+    "comparison_raster": {"type": "object"}
+  }
+}

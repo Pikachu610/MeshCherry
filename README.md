@@ -1,4 +1,39 @@
-# MeshCherry v2 — Windows desktop
+# MeshCherry — Windows desktop
+
+## Source candidate 2.9.1
+
+Nhánh nguồn hiện tại tiếp nối bản portable v2.0.0 đã phát hành. Bản 2.9.1 bổ sung
+quy trình mesh-first, gọi Gmsh cài riêng, ROI SHP/GeoTIFF/ASC, kiểm tra chất lượng,
+extraction trên ô bất biến, so sánh lưới vuông–tam giác và hồ sơ địa hình SF-1.
+Xem [hướng dẫn hiện tại](GNN/mesh_research/src/gis_mesh_workbench/README.md) và
+[ghi chú bản nguồn 2.9.1](RELEASE_V2.9.1.md).
+
+Các sửa lỗi trong 2.9.1 tập trung vào Stop/preflight, phục hồi tác vụ theo request
+ID, metadata khi hủy comparison, cạnh ranh giới dài bằng 0 và số học ổn định.
+Hồ sơ kiểm thử được ghi trong release notes. Việc cập nhật source không thay thế
+kiểm tra trực quan cửa sổ Windows hoặc xác nhận trên máy sạch.
+
+**Binary trong Releases vẫn là v2.0.0 cho đến khi có bản phát hành mới được ghi
+rõ.** Không dùng kết quả kiểm thử nguồn để suy ra EXE cũ đã có chức năng mới.
+
+## Chạy bản nguồn hiện tại
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".\GNN\mesh_research[desktop]"
+.\.venv\Scripts\python.exe .\launch_meshcherry.py
+```
+
+Gmsh được cài riêng và chọn trong Thiết lập Gmsh. Tệp nghiên cứu cá nhân, môi trường
+Python, kết quả chạy và Gmsh executable không thuộc source repository.
+
+Giấy phép mã nguồn: [MIT](LICENSE). Giữ các thông báo giấy phép riêng của font
+và thư viện phụ thuộc khi đóng gói.
+
+## Hướng dẫn lưu trữ cho bản portable v2.0.0
+
+Phần dưới mô tả đúng chức năng và giới hạn của bản binary v2.0.0, được giữ lại
+để người tải bản cũ có thể đối chiếu.
 
 Ứng dụng GIS chạy cục bộ trong cửa sổ riêng, giao diện đỏ–trắng, font Be Vietnam Pro offline và hướng dẫn từng bước. Không cần Python để chạy bản portable.
 
@@ -43,7 +78,7 @@ Xem [hướng dẫn build](GNN/mesh_research/packaging/README.md) và requiremen
 
 ## Kiểm chứng và giới hạn
 
-Bản SecondPro: 97 test được tìm thấy, 96 đạt, 1 skip quyền symlink trên Windows. Frozen EXE tự kiểm tra tài nguyên, CLR, ô vuông 10/30 và tam giác 25/15. Cửa sổ native khởi chạy và phản hồi trên máy build; đây không phải chứng nhận trên máy sạch hay toàn bộ tương tác native. Gói portable chưa ký số.
+Riêng mốc portable v2.0.0: 97 test được tìm thấy, 96 đạt, 1 skip quyền symlink trên Windows. Frozen EXE của mốc đó tự kiểm tra tài nguyên, CLR, ô vuông 10/30 và tam giác 25/15. Cửa sổ native khởi chạy và phản hồi trên máy build; đây không phải chứng nhận trên máy sạch hay toàn bộ tương tác native. Gói portable chưa ký số. Kết quả ứng viên nguồn 2.9.1 được ghi riêng trong RELEASE_V2.9.1.md.
 
 Bản v1 được giữ trong lịch sử Git. Binary phân phối qua Release asset, không commit thư viện/binary hay dữ liệu cá nhân vào source Git.
 
