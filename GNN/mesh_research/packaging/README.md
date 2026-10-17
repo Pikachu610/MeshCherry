@@ -1,4 +1,15 @@
-# MeshCherry 2.9.1 candidate — Windows build and acceptance
+# MeshCherry 3.0 RC8 — Windows build and acceptance
+
+Application identity: `3.0.0rc8`; candidate tag: `v3.0.0-rc.8` (not yet published).
+The candidate adds native-picker correction, explicit Step-1 preview, offline
+MathML, conditional required markers, .mcy projects and GeoJSON/GeoTIFF/ASC exports
+to the audited source baseline. No new scientific algorithm is claimed.
+The candidate also adds explicit per-user `.mcy` file association and bounded
+startup project opening. Registration checks effective Windows ownership;
+unregistration preserves unowned/nonempty keys. Explorer operation is a manual
+acceptance gate; mocked registry tests do not establish native-shell behavior.
+Native-window and clean-machine acceptance remain explicit gates
+for stable 3.0; automated verification permits only the RC prerelease.
 
 The 2.9.1 source candidate repairs the source-audit regressions: job-control
 responsiveness during preflight, request-specific main-run recovery, cancelled
@@ -54,12 +65,12 @@ Run from the root of the source checkout. Use a new environment and unoccupied
 dist/work directories; adjust their names if a previous candidate exists.
 
 ```powershell
-py -3.12 -m venv .scratch/meshcherry-build-291
-.scratch/meshcherry-build-291/Scripts/python.exe -m pip install -r GNN/mesh_research/packaging/requirements-v2.lock.txt
+py -3.12 -m venv .scratch/gis-mesh-workbench/build-env-300
+.scratch/gis-mesh-workbench/build-env-300/Scripts/python.exe -m pip install -r GNN/mesh_research/packaging/requirements-v2.lock.txt
 $env:PYTHONPATH = (Resolve-Path './GNN/mesh_research/src').Path
-.scratch/meshcherry-build-291/Scripts/python.exe -m unittest discover -s GNN/mesh_research/tests -t GNN/mesh_research -p 'test_workbench*.py'
+.scratch/gis-mesh-workbench/build-env-300/Scripts/python.exe -m unittest discover -s GNN/mesh_research/tests -t GNN/mesh_research -p 'test_workbench*.py'
 node --test GNN/mesh_research/tests/workbench_ui_state.test.cjs GNN/mesh_research/tests/workbench_recovery_regressions.test.cjs
-.scratch/meshcherry-build-291/Scripts/python.exe -m PyInstaller GNN/mesh_research/packaging/MeshCherry.spec --distpath MeshCherry/MeshCherry-Desktop-v2.9.1-rc1 --workpath .scratch/meshcherry-build-v291-rc1
+.scratch/gis-mesh-workbench/build-env-300/Scripts/python.exe -m PyInstaller GNN/mesh_research/packaging/MeshCherry.spec --distpath MeshCherry/MeshCherry-Desktop-v3.0.0-rc8 --workpath .scratch/gis-mesh-workbench/build-v300-rc8
 ```
 
 The workbench tests are the application suite. The full `test_*.py` discovery in
@@ -90,6 +101,14 @@ directory for an acceptance candidate. Full package/source parity, exact EXE smo
 native Windows interaction and clean-account/machine tests gate publication.
 
 ## Desktop operation and diagnostics
+
+The portable bundle includes `Dang-ky-tep-MCY.cmd` and `Go-lien-ket-MCY.cmd`.
+These explicitly invoke `--register-mcy` / `--unregister-mcy`; normal startup
+does not change Windows associations. A registered file opens through
+`MeshCherry.exe --open-project "path/to/project.mcy"`. Keep the application
+directory in place or explicitly register its new location. A foreign effective
+association or Windows UserChoice blocks registration and requires the user to
+choose their default through Windows. Registry writes stay in the current user.
 
 Build on Windows x64 using Python 3.12, the project GIS dependencies, pywebview 6.2.1 and PyInstaller 6.22.3. WebView2 Evergreen Runtime is required on the target machine. Python is bundled; no SecondPro development paths are required.
 

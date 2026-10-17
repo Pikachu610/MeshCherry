@@ -44,15 +44,25 @@ def mesh_domain(config):
     return box(*source['extent']),None
 
 
+def _decode_gmsh_output(data):
+    """Decode subprocess bytes without locale-dependent surrogate escapes."""
+    if isinstance(data, str):
+        # Some text-mode subprocess decoders use surrogateescape on Windows.
+        return ''.join('\ufffd' if 0xd800 <= ord(char) <= 0xdfff else char
+                       for char in data)
+    return data.decode('utf-8', errors='replace')
+
+
 def inspect_executable(path):
     executable=Path(path).expanduser().resolve(strict=True)
     if not executable.is_file() or executable.name.lower() not in {'gmsh.exe','gmsh'}:
         raise ValueError('Chọn Gmsh 4.x executable: gmsh.exe / gmsh; nên tải từ gmsh.info')
     before=_digest(executable)
     if current() is None:
-        result=subprocess.run([str(executable),'-version'],capture_output=True,text=True,
+        result=subprocess.run([str(executable),'-version'],capture_output=True,
             timeout=8,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
-        version=(result.stdout.strip() or result.stderr.strip())
+        version=(_decode_gmsh_output(result.stdout).strip() or
+                 _decode_gmsh_output(result.stderr).strip())
     else:
         with tempfile.TemporaryDirectory(prefix='meshcherry-version-') as directory:
             log=Path(directory)/'version.log'

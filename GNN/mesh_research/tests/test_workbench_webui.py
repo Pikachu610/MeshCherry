@@ -16,6 +16,75 @@ from gis_mesh_workbench.webui import WorkbenchServer
 
 
 class WebUITests(unittest.TestCase):
+    def _startup_project(self, path):
+        from gis_mesh_workbench.project_io import save_project
+        from rasterio.crs import CRS
+        cells=dict(schema_version='workbench-cells-v1',crs_wkt=CRS.from_epsg(32649).to_wkt(),
+            coordinate_units='m',cells=[dict(cell_id='startup-cell',kind='rectangle',xy=[
+                [500000,1000000],[500001,1000000],[500001,1000001],[500000,1000001]])])
+        save_project(path,cells=cells,qa=dict(status='pass'),config={})
+        return path
+
+    def test_startup_project_is_authenticated_and_consumed_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);archive=self._startup_project(root/'incoming.mcy')
+            server=WorkbenchServer(root,startup_project=archive)
+            thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+            self.addCleanup(lambda:(server.shutdown(),server.server_close(),thread.join(timeout=3)))
+            def post(token=True):
+                connection=http.client.HTTPConnection(*server.server_address,timeout=5)
+                headers={'Origin':server.origin,'Content-Length':'0'}
+                if token:headers['X-Workbench-Token']=server.token
+                connection.request('POST','/api/project/startup',headers=headers)
+                response=connection.getresponse();status=response.status;body=json.loads(response.read());connection.close()
+                return status,body
+            status,bootstrap=self.request_with_server(server,'GET','/api/bootstrap')
+            self.assertEqual(status,200)
+            self.assertTrue(bootstrap['has_startup_project'])
+            self.assertNotIn('startup_project_path',bootstrap)
+            self.assertEqual(post(token=False)[0],403)
+            self.assertTrue(server.has_startup_project)
+            status,opened=post()
+            self.assertEqual(status,200,opened)
+            self.assertTrue(opened['job_id'].startswith('project-'))
+            self.assertFalse(server.has_startup_project)
+            self.assertEqual(post()[0],404)
+
+    def test_failed_startup_import_retains_snapshot_for_retry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);archive=root/'bad.mcy';archive.write_bytes(b'not a valid archive')
+            server=WorkbenchServer(root,startup_project=archive)
+            thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+            self.addCleanup(lambda:(server.shutdown(),server.server_close(),thread.join(timeout=3)))
+            for _ in range(2):
+                connection=http.client.HTTPConnection(*server.server_address,timeout=5)
+                connection.request('POST','/api/project/startup',headers={
+                    'Origin':server.origin,'X-Workbench-Token':server.token,'Content-Length':'0'})
+                response=connection.getresponse();status=response.status;response.read();connection.close()
+                self.assertEqual(status,400)
+                self.assertTrue(server.has_startup_project)
+
+    def test_startup_project_path_requires_regular_mcy_within_size_limit(self):
+        from gis_mesh_workbench.document_api import MAX_PROJECT_BYTES
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            wrong=root/'project.zip';wrong.write_bytes(b'archive')
+            with self.assertRaisesRegex(ValueError,r'\.mcy'):
+                WorkbenchServer(root,startup_project=wrong)
+            folder=root/'folder.mcy';folder.mkdir()
+            with self.assertRaisesRegex(ValueError,'regular'):
+                WorkbenchServer(root,startup_project=folder)
+            oversized=root/'large.mcy'
+            with oversized.open('wb') as stream:stream.truncate(MAX_PROJECT_BYTES+1)
+            with self.assertRaisesRegex(ValueError,'64 MiB'):
+                WorkbenchServer(root,startup_project=oversized)
+
+    def request_with_server(self,server,method,path):
+        connection=http.client.HTTPConnection(*server.server_address,timeout=5)
+        connection.request(method,path,headers={'Origin':server.origin,'X-Workbench-Token':server.token})
+        response=connection.getresponse();status=response.status;body=json.loads(response.read());connection.close()
+        return status,body
+
     def test_stalled_log_response_does_not_block_stop(self):
         from gis_mesh_workbench.webui import Handler
         from gis_mesh_workbench.job_control import JobControl
@@ -269,9 +338,11 @@ class WebUITests(unittest.TestCase):
         self.assertIn('.cell-node:focus,.cell-poly:focus{outline:none}', css)
         self.assertIn('.cell-node{vector-effect:non-scaling-stroke}', css)
         script = (ASSETS/'coach.js').read_text(encoding='utf-8')
-        self.assertIn("addEventListener('mouseenter'", script)
-        self.assertIn("addEventListener('focus'", script)
-        self.assertIn("e.key==='Escape'", script)
+        self.assertNotIn("addEventListener('mouseenter'", script)
+        self.assertNotIn("addEventListener('focus'", script)
+        self.assertNotIn('hover-help', html)
+        self.assertIn('tutorial-help', html)
+        self.assertIn('coach-hide', script)
         self.assertNotIn('fetch(', script)
 
     def test_concise_copy_and_boundary_in_input_stage(self):
@@ -440,7 +511,15 @@ class WebUITests(unittest.TestCase):
         script = (ASSETS/'app.js').read_text(encoding='utf-8')
         coach = (ASSETS/'coach.js').read_text(encoding='utf-8')
         css = (ASSETS/'wizard.css').read_text(encoding='utf-8')
-        self.assertIn("'validate':'Kiểm tra cấu hình trước khi tạo lưới.'", coach)
+        self.assertNotIn('const help={', coach)
+        for ident in ('project-open', 'project-save', 'project-file', 'export-format', 'export-resolution', 'export-run', 'relief-formula', 'sf1-formula'):
+            self.assertEqual(html.count('id="'+ident+'"'), 1)
+        for value in ('geojson', 'geotiff', 'asc'):
+            self.assertIn('value="'+value+'"', html)
+        self.assertIn('<math id="relief-formula"', html)
+        self.assertIn('class="limit-grid"', html)
+        self.assertIn('class="help-cards"', html)
+        self.assertIn('class="required-note"', html)
         for content in (html, script, coach):
             for contrast in ('không phải', 'chưa phải', 'không có nghĩa là'):
                 self.assertNotIn(contrast, content)

@@ -25,7 +25,7 @@ def _invoke_dialog(callback):
     return result[0]
 
 
-def launch(workspace=WORKSPACE, webview_module=None, preferences=None):
+def launch(workspace=WORKSPACE, webview_module=None, preferences=None, startup_project=None):
     if webview_module is None:
         try:
             import webview as webview_module
@@ -36,7 +36,7 @@ def launch(workspace=WORKSPACE, webview_module=None, preferences=None):
     migrate_legacy(Path(workspace)/'.scratch/gis-mesh-workbench/gmsh.json',gmsh_preferences)
     server = WorkbenchServer(workspace=workspace,tutorial_preferences=preferences,
         recent_preferences=preferences.with_name('recent-files.json'),
-        gmsh_preferences=gmsh_preferences)
+        gmsh_preferences=gmsh_preferences,startup_project=startup_project)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -44,7 +44,7 @@ def launch(workspace=WORKSPACE, webview_module=None, preferences=None):
             server.origin + '/#token=' + server.token, width=1280, height=860,
             min_size=(820, 620))
         def native_picker(kind):
-            filters = {'raster': ('Raster GeoTIFF / ASC (*.tif;*.tiff;*.asc)',),
+            filters = {'raster': ('Raster GeoTIFF and ASC (*.tif;*.tiff;*.asc)',),
                        'mesh': ('Mesh JSON (*.json)',),
                        'boundary': ('Shapefile boundary (*.shp)',),
                        'gmsh': ('Gmsh executable (*.exe)',)}

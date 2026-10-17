@@ -12,15 +12,33 @@ from gis_mesh_workbench.extraction import extract_attributes
 
 
 class DesktopTests(unittest.TestCase):
-    def test_native_picker_uses_windows_dialog_filters_and_cancel(self):
+    def test_native_picker_filters_pass_pywebview_validation(self):
+        try:
+            from webview.util import parse_file_type
+        except ImportError:
+            self.skipTest('pywebview is an optional desktop dependency')
         with tempfile.TemporaryDirectory() as directory:
             server=WorkbenchServer(directory); view=MagicMock()
-            view.create_window.return_value.create_file_dialog.return_value=None
+            validated=[]
+            def validate_filter(dialog_type, *, allow_multiple, file_types):
+                # This is the same validator used by Window.create_file_dialog.
+                parsed=tuple(parse_file_type(file_type) for file_type in file_types)
+                validated.append((dialog_type,allow_multiple,file_types,parsed))
+                return None
+            view.create_window.return_value.create_file_dialog.side_effect=validate_filter
             def start(**kwargs):
-                self.assertEqual(server.choose_native({'kind':'raster'}),{'cancelled':True})
-                args=view.create_window.return_value.create_file_dialog.call_args
-                self.assertEqual(args.args[0],view.FileDialog.OPEN)
-                self.assertEqual(args.kwargs,dict(allow_multiple=False,file_types=('Raster GeoTIFF / ASC (*.tif;*.tiff;*.asc)',)))
+                for kind,expected in {
+                    'raster':('Raster GeoTIFF and ASC (*.tif;*.tiff;*.asc)',),
+                    'mesh':('Mesh JSON (*.json)',),
+                    'boundary':('Shapefile boundary (*.shp)',),
+                    'gmsh':('Gmsh executable (*.exe)',),
+                }.items():
+                    self.assertEqual(server.choose_native({'kind':kind}),{'cancelled':True})
+                    self.assertEqual(validated[-1][0],view.FileDialog.OPEN)
+                    self.assertFalse(validated[-1][1])
+                    self.assertEqual(validated[-1][2],expected)
+                self.assertEqual([entry[3][0][1] for entry in validated],
+                    ['*.tif;*.tiff;*.asc','*.json','*.shp','*.exe'])
                 server.choose_native({'kind':'output'})
                 self.assertEqual(view.create_window.return_value.create_file_dialog.call_args.args[0],view.FileDialog.FOLDER)
             view.start.side_effect=start
@@ -74,6 +92,16 @@ class DesktopTests(unittest.TestCase):
             self.assertTrue(view.start.call_args.kwargs['private_mode'])
             self.assertEqual(servers[0].socket.fileno(), -1)
             self.assertEqual(servers[0].gmsh_preferences, Path(directory)/'gmsh.json')
+
+    def test_launch_passes_only_explicit_startup_project(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace=Path(directory);startup=workspace/'incoming.mcy';startup.write_bytes(b'archive')
+            server=WorkbenchServer(workspace)
+            view=MagicMock()
+            with patch('gis_mesh_workbench.desktop.WorkbenchServer',return_value=server) as factory:
+                launch(workspace,webview_module=view,preferences=workspace/'preferences.json',
+                       startup_project=startup)
+            self.assertEqual(factory.call_args.kwargs['startup_project'],startup)
 
     def test_failure_still_shuts_down(self):
         with tempfile.TemporaryDirectory() as directory:

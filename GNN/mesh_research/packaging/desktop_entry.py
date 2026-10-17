@@ -75,6 +75,60 @@ def self_test(report, gmsh_path=None, boundary_path=None):
                 analysis_crs='EPSG:32649',band=1,semantics='intensive',value_units='m')['cells']]
             if values!=expected:raise RuntimeError('ASC extraction differs: '+str(values))
             checks['ascii_'+name]=values
+    # Offline project reopening and new export code must also work when frozen.
+    from gis_mesh_workbench.project_io import save_project, load_project
+    from gis_mesh_workbench.indexed_extraction import extract_indexed
+    from gis_mesh_workbench.exports import export_cells
+    from gis_mesh_workbench.mesh_workflow import quality
+    import zipfile
+    with tempfile.TemporaryDirectory(prefix='meshcherry-project-smoke-') as directory:
+        destination=Path(directory)
+        payload=dict(schema_version='workbench-cells-v1',crs_wkt=triangle.crs_wkt,
+            coordinate_units='m',cells=[dict(cell_id=c.cell_id,kind=c.kind,xy=[list(p) for p in c.xy]) for c in triangle.cells])
+        attributes=extract_indexed(root/'sample_10_30.tif',triangle.cells,
+            cell_crs=triangle.crs_wkt,analysis_crs=triangle.crs_wkt,band=1,
+            semantics='intensive',value_units='synthetic-value')
+        save_project(destination/'example.mcy',cells=payload,
+            qa=dict(status='pass',mesh_quality=quality(triangle.cells)),attributes=attributes,
+            view_settings=dict(show_edges=True,show_nodes=True,result_tab='extract'))
+        restored=load_project(destination/'example.mcy')
+        startup_workspace=destination/'startup-session';startup_workspace.mkdir()
+        startup_server=WorkbenchServer(startup_workspace,startup_project=destination/'example.mcy')
+        startup_thread=threading.Thread(target=startup_server.serve_forever,daemon=True)
+        startup_thread.start()
+        try:
+            conn=http.client.HTTPConnection(*startup_server.server_address,timeout=20)
+            headers={'Host':startup_server.host,'Origin':startup_server.origin,
+                     'X-Workbench-Token':startup_server.token,'Content-Type':'application/json'}
+            conn.request('POST','/api/project/startup',headers=headers)
+            response=conn.getresponse();opened=json.loads(response.read())
+            if response.status!=200 or not opened.get('has_attributes'):
+                raise RuntimeError('Frozen startup project import failed')
+            conn.request('POST','/api/project/startup',headers=headers)
+            response=conn.getresponse();response.read();conn.close()
+            if response.status==200:raise RuntimeError('Startup project imported more than once')
+            checks['startup_mcy']=dict(status='pass',explicit_file_only=True,consumed_once=True)
+        finally:
+            startup_server.shutdown();startup_server.server_close();startup_thread.join(timeout=5)
+        import math
+        restored_values=[r['value'] for r in restored['attributes']['cells']]
+        original_values=[r['value'] for r in attributes['cells']]
+        if ([c.cell_id for c in restored['cell_objects']]!=[c.cell_id for c in triangle.cells]
+                or restored_values!=original_values
+                or not all(math.isclose(value,expected,rel_tol=1e-12,abs_tol=1e-12)
+                           for value,expected in zip(restored_values,[25,15],strict=True))):
+            raise RuntimeError('Frozen project round trip changed geometry/attributes')
+        for format,name in [('geojson','cells.geojson'),('geotiff','cells.tif'),('asc','cells-asc.zip')]:
+            path=destination/name
+            export_cells(path,format,restored['cells'],restored['attributes'],crs=triangle.crs_wkt,
+                resolution=.5,max_pixels=1000)
+            if not path.is_file() or not path.stat().st_size:
+                raise RuntimeError('Missing frozen export: '+format)
+        with zipfile.ZipFile(destination/'cells-asc.zip') as archive:
+            if not {'meshcherry.asc','meshcherry.prj'}.issubset(archive.namelist()):
+                raise RuntimeError('Frozen ASC export lacks projection sidecar')
+        checks['offline_mcy_and_exports']=dict(status='pass',cell_ids_preserved=True,
+            values=[25,15],formats=['geojson','geotiff','asc+prj'])
     if gmsh_path:
         from gis_mesh_workbench.runner import run, write_json
         with tempfile.TemporaryDirectory(prefix='meshcherry-gmsh-smoke-') as directory:
@@ -227,16 +281,35 @@ def main():
     parser.add_argument('--self-test', type=Path, metavar='REPORT_JSON')
     parser.add_argument('--gmsh-test', type=Path, metavar='GMSH_EXE')
     parser.add_argument('--boundary-test', type=Path, metavar='SHP')
+    parser.add_argument('--open-project', type=Path, metavar='PROJECT_MCY')
+    parser.add_argument('--register-mcy', action='store_true')
+    parser.add_argument('--unregister-mcy', action='store_true')
     args = parser.parse_args()
     try:
+        if sum(bool(value) for value in (args.self_test,args.open_project,args.register_mcy,args.unregister_mcy))>1:
+            raise ValueError('Chọn một thao tác mở dự án, đăng ký tệp hoặc kiểm thử.')
         if args.self_test:
             self_test(args.self_test,args.gmsh_test,args.boundary_test)
+        elif args.register_mcy or args.unregister_mcy:
+            if not getattr(sys,'frozen',False):
+                raise ValueError('Chạy thao tác liên kết tệp từ MeshCherry.exe đã đóng gói.')
+            from gis_mesh_workbench.file_association import install_per_user, uninstall_per_user
+            if args.register_mcy:
+                install_per_user(Path(sys.executable))
+                message='Đã đăng ký tệp .mcy với MeshCherry. Nhấp đúp tệp dự án để mở. Giữ nguyên vị trí thư mục ứng dụng.'
+            else:
+                result=uninstall_per_user()
+                message=('Không có liên kết tệp do MeshCherry quản lý để gỡ.'
+                         if result['status'] in {'not_owned','not_installed'} else
+                         'Đã gỡ liên kết tệp .mcy của MeshCherry cho tài khoản hiện tại.')
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None,message,'MeshCherry',0x40)
         else:
             from gis_mesh_workbench.desktop import launch
             from gis_mesh_workbench.webui import WORKSPACE
             workspace = args.workspace or WORKSPACE
             workspace.mkdir(parents=True, exist_ok=True)
-            launch(workspace)
+            launch(workspace, startup_project=args.open_project)
         return 0
     except Exception:
         if args.self_test:
@@ -246,8 +319,13 @@ def main():
             log = Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'MeshCherry' / 'startup-error.log'
             log.parent.mkdir(parents=True, exist_ok=True)
             log.write_text(traceback.format_exc(), encoding='utf-8')
+            detail=(('Không cập nhật được liên kết tệp .mcy.\n\n'+str(sys.exc_info()[1]))
+                    if args.register_mcy or args.unregister_mcy else
+                    ('Không mở được dự án MeshCherry.\n\n'+str(sys.exc_info()[1]))
+                    if args.open_project else
+                    'Không mở được MeshCherry. Kiểm tra WebView2 Runtime và quyền ghi thư mục workspace.\n\n'+traceback.format_exc())
             ctypes.windll.user32.MessageBoxW(None,
-                'Không mở được MeshCherry. Kiểm tra WebView2 Runtime và quyền ghi thư mục workspace.\n\n'+traceback.format_exc(),
+                detail,
                 'MeshCherry · lỗi khởi động', 0x10)
         return 1
 

@@ -12,7 +12,7 @@ import numpy as np
 import rasterio
 from affine import Affine
 
-from gis_mesh_workbench.runner import run
+from gis_mesh_workbench.runner import run, validate_config, preflight
 
 
 class RunnerTests(unittest.TestCase):
@@ -34,6 +34,67 @@ class RunnerTests(unittest.TestCase):
         self.path.write_text(json.dumps(self.config),encoding='utf-8')
         result=run(self.path)
         return result,Path(result['output'])
+
+    def test_v2_missing_roi_reports_specific_safe_guidance(self):
+        config=dict(schema_version='gis-workbench-run-config-v2',operation='mesh_only',
+            extraction_engine='indexed_windowed_v1',run_name='invalid-source',
+            analysis_crs='EPSG:32649',output_root='D:/private/output',
+            cell_source=dict(kind='gmsh_generated',max_cells=100000,
+                executable='D:/private/tools/gmsh.exe',sizing='relief',h_min_m=250,h_max_m=1000,
+                roi_raster_path='',dem_raster_path='D:/private/data/private-dem.tif',
+                dem_band=1,relief_radius_m=500))
+        report,_=preflight(config)
+        self.assertEqual(report['status'],'fail')
+        message=' '.join(report['errors'])
+        self.assertIn('Chọn ranh giới ROI: GeoTIFF/ASC, bộ SHP hoặc miền chữ nhật.',message)
+        self.assertIn('DEM đã chọn dùng để tính relief.',message)
+        for private in ('D:/private/output','D:/private/tools/gmsh.exe','private-dem.tif',
+                        'not valid under any of the given schemas',"{'kind':"):
+            self.assertNotIn(private,message)
+        self.assertLess(len(message),400)
+
+    def test_schema_errors_are_bounded_and_never_echo_config_values(self):
+        config=dict(schema_version='gis-workbench-run-config-v2',operation='mesh_only',
+            extraction_engine='indexed_windowed_v1',run_name='sensitive-run-name',
+            analysis_crs='EPSG:32649',output_root='D:/private/secret-output',
+            cell_source=dict(kind='structured_grid',extent=[0,0,1,1],
+                cell_width_m=1,cell_height_m=1,boundary_policy='strict',
+                unexpected_private_value='do-not-echo'))
+        with self.assertRaises(ValueError) as raised:
+            validate_config(config)
+        message=str(raised.exception)
+        self.assertIn('Nguồn lưới',message)
+        self.assertIn('cấu hình chưa khớp dạng được hỗ trợ',message)
+        for private in ('D:/private/secret-output','sensitive-run-name','do-not-echo',"{'kind':"):
+            self.assertNotIn(private,message)
+        self.assertLess(len(message),400)
+
+    def test_invalid_source_shape_gets_schema_message_not_attribute_error(self):
+        config=dict(schema_version='gis-workbench-run-config-v2',operation='mesh_only',
+            extraction_engine='indexed_windowed_v1',run_name='bad-source',
+            analysis_crs='EPSG:32649',output_root='D:/private/output',cell_source=None)
+        with self.assertRaises(ValueError) as raised:
+            validate_config(config)
+        self.assertIn('Nguồn lưới',str(raised.exception))
+        self.assertNotIn('AttributeError',str(raised.exception))
+        self.assertNotIn('D:/private/output',str(raised.exception))
+
+    def test_preflight_reports_invalid_source_shape_without_raising(self):
+        base=dict(schema_version='gis-workbench-run-config-v2',operation='mesh_only',
+            extraction_engine='indexed_windowed_v1',run_name='bad-source',
+            analysis_crs='EPSG:32649',output_root='D:/private/output')
+        for source in (None,'not-an-object'):
+            report,cells=preflight(dict(base,cell_source=source))
+            self.assertEqual(report['status'],'fail')
+            self.assertIsNone(cells)
+            self.assertTrue(report['errors'])
+            self.assertNotIn('AttributeError',' '.join(report['errors']))
+            self.assertNotIn('D:/private/output',' '.join(report['errors']))
+            self.assertLess(len(' '.join(report['errors'])),400)
+        report,cells=preflight([])
+        self.assertEqual(report['status'],'fail')
+        self.assertIsNone(cells)
+        self.assertIn('Cấu hình',report['errors'][0])
 
     def test_grid_artifacts_hashes_repeat_and_source_immutable(self):
         before=hashlib.sha256(self.raster.read_bytes()).hexdigest()

@@ -1,6 +1,16 @@
 # MeshCherry — Windows desktop
 
-## Source candidate 2.9.1
+## MeshCherry 3.0 RC8 — bản nguồn thử nghiệm
+
+Mã nguồn hiện tại dùng application version `3.0.0rc8`, tiếp nối bản nguồn
+2.9.1. Xem [ghi chú 3.0 RC8](RELEASE_V3.0.0-RC8.md) và hướng dẫn đóng gói tại
+[packaging](GNN/mesh_research/packaging/README.md). Bản cập nhật này công bố mã
+nguồn, chưa phát hành ZIP RC8 trên GitHub Releases. Cần WebView2; Gmsh cài riêng.
+
+RC8 là ứng viên thử nghiệm, chưa nghiệm thu đầy đủ giao diện Windows/máy sạch. Bản ổn định
+cũ v2.0.0 được giữ lại để đối chiếu. Chỉ số test không thay thế nghiệm thu desktop.
+
+## Nền tảng mã nguồn 2.9.1
 
 Nhánh nguồn hiện tại tiếp nối bản portable v2.0.0 đã phát hành. Bản 2.9.1 bổ sung
 quy trình mesh-first, gọi Gmsh cài riêng, ROI SHP/GeoTIFF/ASC, kiểm tra chất lượng,
@@ -13,8 +23,7 @@ ID, metadata khi hủy comparison, cạnh ranh giới dài bằng 0 và số h�
 Hồ sơ kiểm thử được ghi trong release notes. Việc cập nhật source không thay thế
 kiểm tra trực quan cửa sổ Windows hoặc xác nhận trên máy sạch.
 
-**Binary trong Releases vẫn là v2.0.0 cho đến khi có bản phát hành mới được ghi
-rõ.** Không dùng kết quả kiểm thử nguồn để suy ra EXE cũ đã có chức năng mới.
+Không dùng kết quả kiểm thử nguồn mới để suy ra EXE cũ v2.0.0 đã có chức năng mới.
 
 ## Chạy bản nguồn hiện tại
 

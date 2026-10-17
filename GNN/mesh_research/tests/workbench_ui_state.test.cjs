@@ -13,14 +13,14 @@ function setup(){
     append(...items){this.children.push(...items);} before(){} replaceChildren(...items){this.children=items;}
     setAttribute(name,value){this.attributes[name]=String(value);if(name==='data-id')this.dataset.id=String(value);}
     getAttribute(name){return this.attributes[name]??null;} removeAttribute(name){delete this.attributes[name];}
-    addEventListener(name,callback){this.handlers??={};this.handlers[name]=callback;} focus(){this.focused=true;} click(){this.clicked=true;}
+    addEventListener(name,callback){this.handlers??={};this.handlers[name]=callback;} focus(){this.focused=true;} scrollIntoView(options){this.scrollOptions=options;} click(){this.clicked=true;}
     querySelectorAll(selector){const descendants=this.children.flatMap(c=>[c,...c.querySelectorAll(selector)]);return descendants.filter(c=>selector==='[data-id]'?c.dataset.id:selector==='input,select,button'?false:(c.attributes.class||'').split(' ').includes(selector.slice(1)));}
   }
   const get=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
   get('crs').value='EPSG:32649';get('band').value='1';get('raster').value='a.tif';get('mode').value='structured_grid';
   const timers=[];
   const urls={created:[],revoked:[],createObjectURL(blob){this.created.push(blob);return 'blob:preview-'+this.created.length;},revokeObjectURL(url){this.revoked.push(url);}};
-  const context=vm.createContext({document:{getElementById:get,createElement:()=>new Element(),createElementNS:()=>new Element(),querySelector:selector=>get(selector),querySelectorAll:()=>[],body:{dataset:{}}},location:{hash:'',pathname:'/',reload(){this.reloads=(this.reloads||0)+1;}},sessionStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,String(value)),removeItem:key=>storage.delete(key)},URL:urls,Blob,atob,Uint8Array,URLSearchParams,history:{},coach:{update(){}},setTimeout:callback=>{timers.push(callback);return timers.length;},clearTimeout(){},console,fetch(){throw Error('mock API not configured');}});
+  const context=vm.createContext({document:{getElementById:get,createElement:()=>new Element(),createElementNS:()=>new Element(),querySelector:selector=>get(selector),querySelectorAll:()=>[],body:{dataset:{}}},window:{matchMedia:()=>({matches:false})},location:{hash:'',pathname:'/',reload(){this.reloads=(this.reloads||0)+1;}},sessionStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,String(value)),removeItem:key=>storage.delete(key)},URL:urls,Blob,atob,Uint8Array,URLSearchParams,history:{},coach:{update(){}},setTimeout:callback=>{timers.push(callback);return timers.length;},clearTimeout(){},console,fetch(){throw Error('mock API not configured');}});
   vm.runInContext(script.split("$('form').addEventListener")[0],context);
   // Exercise the production result renderer as part of the completed-job flow.
   vm.runInContext(script.slice(script.indexOf('function showMeshQuality('),script.indexOf("$('extract-run').onclick")),context);
@@ -31,6 +31,158 @@ async function runProductionBootstrap(t){
   t.run('mode=()=>{};savedGmshFeedback=()=>{};');t.run('bootstrapPromise='+script.slice(start,end));
   await t.run('bootstrapPromise');for(let i=0;i<8;i++)await Promise.resolve();
 }
+
+test('explicit startup project takes priority over previous workspace recovery',async()=>{
+  const t=setup();
+  t.run("api=async()=>({roots:[],has_startup_project:true});openProject=async(file,startup)=>{startupCalled={file,startup};};readRunRequest=()=>{throw Error('must not recover old task');};");
+  await runProductionBootstrap(t);
+  assert.equal(t.run('startupCalled.file'),null);assert.equal(t.run('startupCalled.startup'),true);
+});
+
+test('startup project import posts no user-controlled path or request body',async()=>{
+  const t=setup(),calls=[];
+  t.context.fetch=async(path,options)=>{calls.push({path,options});return{ok:false,json:async()=>({error:'test stop after request'})};};
+  t.run('toast=()=>{};');await t.run('openProject(null,true)');
+  assert.equal(calls.length,1);assert.equal(calls[0].path,'/api/project/startup');
+  assert.equal(calls[0].options.method,'POST');assert.equal(calls[0].options.body,undefined);
+  assert.equal(t.run('busy'),false);
+});
+
+test('empty ROI with a selected relief DEM returns a field-specific error before HTTP',async()=>{
+  const t=setup();t.get('mode').value='gmsh_generated';t.get('gmsh-domain').value='raster';
+  t.get('raster').value='';t.get('dem-raster').value='elevation.tif';
+  t.run("currentStage=3;checkParameterFields=()=>true;stage=value=>{currentStage=value;};");
+  await t.run('validate()');
+  assert.equal(t.run('currentStage'),1);assert.equal(t.get('raster').focused,true);
+  assert.match(t.get('source-info').textContent,/Chọn GeoTIFF.*ranh giới ROI/);
+  assert.doesNotMatch(t.get('source-info').textContent,/cell_source|schemas|elevation.tif/);
+  assert.equal(t.run('preflightId'),null);
+});
+
+test('missing shapefile and invalid rectangle identify source fields without guessing ROI',()=>{
+  const t=setup();t.get('mode').value='gmsh_generated';t.get('gmsh-domain').value='shapefile';
+  assert.throws(()=>t.run('config()'),/Chọn bộ Shapefile/);
+  t.get('gmsh-domain').value='rectangle';
+  for(const id of ['west','south','east','north'])t.get(id).value='';
+  assert.throws(()=>t.run('config()'),/Nhập đủ bốn tọa độ/);
+  for(const [id,v] of Object.entries({west:10,south:0,east:5,north:2}))t.get(id).value=String(v);
+  assert.throws(()=>t.run('config()'),/X lớn nhất.*X nhỏ nhất/);
+});
+
+test('structured raster ROI is required after clearing the source but rectangle has no raster requirement',()=>{
+  const t=setup();t.get('mode').value='structured_grid';t.get('gmsh-domain').value='raster';
+  t.get('raster').value='';t.run("source={crs:'EPSG:32649'};");
+  assert.throws(()=>t.run('config()'),/ranh giới ROI/);
+  t.get('gmsh-domain').value='rectangle';
+  for(const [id,v] of Object.entries({west:0,south:0,east:100,north:100,width:10,height:10,band:1,subdivisions:8,'max-cells':100}))t.get(id).value=String(v);
+  assert.equal(t.run('config().cell_source.roi_raster_path'),undefined);
+});
+
+test('rectangle Next preserves entered extent despite a previously selected raster',async()=>{
+  const t=setup();t.get('gmsh-domain').value='rectangle';t.get('raster').value='previous.tif';
+  for(const [id,v] of Object.entries({west:10,south:20,east:30,north:40}))t.get(id).value=String(v);
+  t.run("stage=value=>{currentStage=value;};inspectSource=async()=>{throw Error('stale raster was inspected');};toast=value=>{lastToast=value;};");
+  t.run(script.slice(script.indexOf("$('source-next').onclick="),script.indexOf('function showMeshQuality(')));
+  await t.get('source-next').onclick();
+  assert.equal(t.run('currentStage'),2);assert.equal(t.run('typeof lastToast'),'undefined');
+  assert.deepEqual(['west','south','east','north'].map(id=>t.get(id).value),['10','20','30','40']);
+});
+
+test('mesh import Next opens the panel containing its required file input',async()=>{
+  const t=setup();t.get('mode').value='mesh_artifact';t.get('mesh').value='';
+  t.run("stage=value=>{currentStage=value;};toast=value=>{lastToast=value;};");
+  t.run(script.slice(script.indexOf("$('source-next').onclick="),script.indexOf('function showMeshQuality(')));
+  await t.get('source-next').onclick();
+  assert.equal(t.run('currentStage'),2);assert.equal(t.run('typeof lastToast'),'undefined');
+  assert.throws(()=>t.run('config()'),/Chọn mesh JSON/);
+});
+
+test('source Next scrolls the newly opened step to its top without background scroll',async()=>{
+  const t=setup(),scrolls=[];
+  const panel={scrollIntoView:options=>scrolls.push(options)};
+  const heading={focus:options=>{heading.focusOptions=options;}};
+  t.context.window={matchMedia:query=>({matches:query==='(prefers-reduced-motion: reduce)'})};
+  t.context.document.querySelector=selector=>selector.endsWith('h2')?heading:panel;
+  t.get('gmsh-domain').value='rectangle';
+  t.run(script.slice(script.indexOf("$('source-next').onclick="),script.indexOf('function showMeshQuality(')));
+  await t.get('source-next').onclick();
+  assert.equal(t.run('currentStage'),2);
+  assert.equal(scrolls.length,1);assert.equal(scrolls[0].block,'start');assert.equal(scrolls[0].behavior,'auto');
+  assert.equal(heading.focusOptions.preventScroll,true);
+  t.run('stage(1,false)');
+  assert.equal(scrolls.length,1);
+  t.context.window.matchMedia=()=>({matches:false});
+  t.run('stage(3)');assert.equal(scrolls[1].behavior,'smooth');
+  t.run('busy=true;stage(2)');assert.equal(scrolls.length,2);
+});
+
+test('source validation messages appear in the owning visible panel and clear on correction',async()=>{
+  const t=setup();t.get('mode').value='gmsh_generated';t.get('gmsh-domain').value='shapefile';
+  t.run("checkParameterFields=()=>true;stage=value=>{currentStage=value;};");
+  await t.run('validate()');assert.equal(t.run('currentStage'),1);
+  assert.match(t.get('boundary-info').textContent,/Chọn bộ Shapefile/);
+  assert.equal(t.get('boundary-path').focused,true);
+  t.get('gmsh-domain').value='rectangle';
+  await t.run('validate()');assert.equal(t.run('currentStage'),2);
+  assert.equal(t.get('mesh-field-error').hidden,false);assert.equal(t.get('west').focused,true);
+  t.run("clearSourceFieldError('west')");
+  assert.equal(t.get('west').getAttribute('aria-invalid'),null);assert.equal(t.get('mesh-field-error').hidden,true);
+});
+
+test('choosing ROI raster stays at source preview until explicit Next',async()=>{
+  const t=setup();t.run("currentStage=2;stage=(value)=>{currentStage=value;};inspectSource=async()=>({ok:true});refreshRecent=async()=>{};invalidate=()=>{};exitTutorial=()=>{};");
+  await t.run("acceptSelectedSource('raster','new.tif')");
+  assert.equal(t.run('currentStage'),1);assert.equal(t.get('raster').value,'new.tif');
+});
+
+test('choosing DEM does not change ROI or advance the wizard',async()=>{
+  const t=setup();t.run("currentStage=2;invalidate=()=>{};refreshRecent=async()=>{};");
+  await t.run("acceptSelectedSource('dem-raster','elevation.asc')");
+  assert.equal(t.run('currentStage'),2);assert.equal(t.get('raster').value,'a.tif');assert.equal(t.get('dem-raster').value,'elevation.asc');
+});
+
+test('project reopening shows saved extraction only after releasing busy guard',async()=>{
+  const t=setup();
+  t.context.fetch=async()=>({ok:true,json:async()=>({job_id:'project-restored123',has_attributes:true,view_settings:{result_tab:'extract',show_nodes:false,selected_cell_id:'a',view_box:'0 0 2 1'}})});
+  t.run("resetResult=()=>{};clearInputPreview=()=>{};toast=()=>{};restoreSessionMesh=async()=>{meshSnapshot={jobId:'project-restored123',crs:'EPSG:32649',cells:[{cell_id:'a',kind:'rectangle',xy:[[0,0],[1,0],[1,1],[0,1]]}],display:{cell_count:1}};jobId=meshSnapshot.jobId;geometry=meshSnapshot.cells;return true;};api=async path=>path.includes('name=manifest')?{status:'pass',operation:'mesh_only'}:path.includes('/api/job?')?{status:'pass'}:({cells:[{cell_id:'a',value:10}],provenance:{value_units:'m'}});draw=(cells,records)=>{geometry=cells;attrs=new Map(records.map(r=>[r.cell_id,r]));};selectCell=(cell)=>{selectedCellId=cell.cell_id;};");
+  await t.run("openProject({name:'saved.mcy',size:1024})");
+  assert.equal(t.run('busy'),false);assert.equal(t.run('currentStage'),4);
+  assert.equal(t.run('resultTab'),'extract');assert.equal(t.run('selectedCellId'),'a');
+  assert.equal(t.get('show-nodes').checked,false);
+});
+
+test('project artifact read failure preserves the previous accepted result',async()=>{
+  const t=setup();t.context.fetch=async()=>({ok:true,json:async()=>({job_id:'new-project123',has_attributes:false})});
+  t.run("meshSnapshot={jobId:'old-mesh123',cells:[{cell_id:'old'}]};jobId='old-extract123';api=async()=>{throw Error('temporary artifact failure');};toast=message=>{lastToast=message;};");
+  await t.run("openProject({name:'saved.mcy',size:1024})");
+  assert.equal(t.run('meshSnapshot.jobId'),'old-mesh123');assert.equal(t.run('jobId'),'old-extract123');
+  assert.equal(t.run('busy'),false);assert.match(t.run('lastToast'),/temporary artifact failure/);
+});
+
+test('raster export rejects missing resolution before sending HTTP',async()=>{
+  const t=setup();t.run("jobId='finished';toast=message=>{lastToast=message;};");
+  t.get('export-format').value='asc';t.get('export-resolution').value='';
+  await t.run('exportResult()');assert.match(t.run('lastToast'),/độ phân giải/);
+  assert.equal(t.run('busy'),false);
+});
+
+test('export resolution asterisk follows GeoJSON versus raster requirement',()=>{
+  const t=setup(),label=t.get('label[for="export-resolution"]');
+  for(const format of ['geojson','geotiff','asc','geojson']){
+    t.get('export-format').value=format;t.run('syncDocumentControls()');
+    assert.equal(t.get('export-resolution').required,format!=='geojson');
+    assert.equal(label.dataset.required,String(format!=='geojson'));
+  }
+});
+
+test('restored project shows historical ROI evidence separately from current geometry',()=>{
+  const t=setup();t.run("showProjectHistory({historical_qa:{historical_status:'pass',mesh_quality:{cell_count:12,domain_coverage:'pass',domain_symmetric_difference_m2:0.01}}})");
+  const content=t.get('project-history-content');
+  const text=node=>[node.textContent||'',...node.children.map(text)].join(' ');
+  assert.equal(t.get('project-history').hidden,false);
+  assert.match(text(content),/Kết quả của lần tạo lưới đã lưu/);assert.match(text(content),/Phủ ROI · đã lưu/);
+  t.run('showProjectHistory({mesh_quality:{}})');assert.equal(t.get('project-history').hidden,true);
+});
 
 test('comparison and research tables preserve exact integer node counts',()=>{
   const t=setup();t.run("comparisonTable($('counts'),['A','B'],[['Node',13515,13543]])");
@@ -47,7 +199,9 @@ test('comparison configuration uses accepted mesh identity and validates square 
   t.get('comparison-size').value='50';t.get('comparison-band').value='1.5';assert.throws(()=>t.run('comparisonConfig()'),/nguyên dương/);
 });
 test('SF1 profile exposes fixed h and explicit scale without stale single-window parameters',()=>{
+  // A selected executable is required independently of SF-1 size-field parameters.
   const t=setup();for(const [id,value] of Object.entries({'gmsh-sizing':'sf1_relief','mode':'gmsh_generated','gmsh-domain':'rectangle','max-cells':'1000','west':'0','south':'0','east':'1000','north':'1000','h-min':'7','h-max':'9','sf1-scale':'1.2','dem-raster':'dem.tif','dem-band':'1','dem-value-units':'m','subdivisions':'8'}))t.get(id).value=value;
+  t.get('gmsh-exe').value='gmsh.exe';
   t.run('mode()');assert.equal(t.get('h-min').value,'250');assert.equal(t.get('h-max').value,'1000');assert.equal(t.get('h-min').readOnly,true);assert.equal(t.get('sf1-controls').hidden,false);assert.equal(t.get('relief-controls').hidden,true);
   const source=JSON.parse(t.run('JSON.stringify(config().cell_source)'));assert.equal(source.sizing,'sf1_relief');assert.equal(source.sf1_scale,1.2);assert.equal(source.h_min_m,250);assert.equal(source.h_max_m,1000);assert.equal(source.relief_radius_m,undefined);assert.equal(source.dem_raster_path,'dem.tif');assert.equal(source.dem_value_units,'m');
   assert.equal(t.run('checkParameterFields()'),true);t.get('sf1-scale').value='4.1';assert.equal(t.run('checkParameterFields()'),false);assert.match(t.get('sf1-error').textContent,/0,25–4/);
@@ -484,5 +638,6 @@ test('stale planned raster response is discarded and finer h only warns',async()
   const pending=t.run('inspectPlanned()');t.get('crs').value='EPSG:32648';resolve({path:'ref.tif'});assert.equal(await pending,null);assert.equal(t.run('plannedSource'),null);
   for(const [id,v] of Object.entries({mode:'gmsh_generated','gmsh-domain':'raster','gmsh-sizing':'uniform','h-max':'1'}))t.get(id).value=v;
   t.run("source={resolution:{path:'ref.tif',band:1,native_pixel_size:[30,30],native_units:'metre',source_crs:'EPSG:32649',analysis_crs:'EPSG:32649',representative_pixel_size_m:[30,30]}};renderResolution()");
-  assert.match(t.get('resolution-warning').textContent,/giữ nguyên độ phân giải gốc/);assert.equal(t.run('checkParameterFields()'),true);assert.equal(t.get('h-max').value,'1');
+  assert.equal(t.get('resolution-warning').children[0].children.length,3);
+  assert.match(t.get('resolution-warning').children[0].children.map(row=>row.textContent).join(' '),/giữ nguyên độ phân giải gốc/);assert.equal(t.run('checkParameterFields()'),true);assert.equal(t.get('h-max').value,'1');
 });

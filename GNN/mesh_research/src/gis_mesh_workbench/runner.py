@@ -60,16 +60,73 @@ def effective_config(path):
     return config
 
 
+def _friendly_schema_error(error):
+    """Render schema failures without echoing the rejected instance/config."""
+    labels={'config':'Cấu hình','cell_source':'Nguồn lưới','roi_raster_path':'raster ROI',
+            'boundary_path':'bộ SHP','extent':'miền chữ nhật (extent)',
+            'dem_raster_path':'DEM','dem_band':'band DEM','executable':'Gmsh',
+            'h_min_m':'h_min_m','h_max_m':'h_max_m','max_cells':'max_cells',
+            'output_root':'thư mục kết quả','analysis_crs':'CRS phân tích',
+            'run_name':'tên lần chạy','raster_path':'raster dữ liệu',
+            'band':'band dữ liệu','sizing':'cách tính kích thước'}
+    parts=list(error.path)
+    safe_parts=[]
+    for part in parts:
+        if isinstance(part,int):safe_parts.append(f'mục {part}')
+        else:safe_parts.append(labels.get(str(part),'trường'))
+    path=(' › '.join(safe_parts) or 'Cấu hình')[:120]
+    if error.validator in {'oneOf','anyOf','allOf'}:
+        return f'{path}: cấu hình chưa khớp dạng được hỗ trợ; kiểm tra trường bắt buộc và lựa chọn mâu thuẫn.'
+    if error.validator=='required' and isinstance(error.instance,dict):
+        missing=sorted(set(error.validator_value)-set(error.instance))
+        if missing:
+            names=', '.join(labels.get(name,name) for name in missing)
+            return f'{path}: còn thiếu trường bắt buộc {names}.'
+    if error.validator=='additionalProperties':
+        return f'{path}: có trường không hỗ trợ. Kiểm tra tên trường theo loại nguồn đã chọn.'
+    if error.validator=='minLength':
+        return f'{path}: không được để trống.'
+    if error.validator=='type':
+        expected=error.validator_value
+        names={'object':'một đối tượng','array':'một danh sách','string':'văn bản',
+               'number':'một số','integer':'một số nguyên','boolean':'đúng/sai'}
+        if isinstance(expected,list):expected=' hoặc '.join(names.get(item,item) for item in expected)
+        else:expected=names.get(expected,expected)
+        return f'{path}: cần có giá trị dạng {expected}.'
+    if error.validator in {'enum','const'}:
+        values=error.validator_value if error.validator=='enum' else [error.validator_value]
+        return f'{path}: chọn một giá trị hợp lệ ({", ".join(map(str,values))}).'
+    if error.validator in {'minimum','exclusiveMinimum','maximum','exclusiveMaximum'}:
+        bound=error.validator_value
+        relation={'minimum':'không nhỏ hơn','exclusiveMinimum':'lớn hơn',
+                  'maximum':'không lớn hơn','exclusiveMaximum':'nhỏ hơn'}[error.validator]
+        return f'{path}: cần {relation} {bound}.'
+    return f'{path}: chưa đáp ứng yêu cầu cấu hình.'
+
+
 def validate_config(config):
-    source=config.get('cell_source',{})
+    if not isinstance(config,dict):
+        raise ValueError('Cấu hình phải là một đối tượng JSON.')
+    source=config.get('cell_source')
+    if not isinstance(source,dict):source={}
     if config.get('schema_version')=='gis-workbench-run-config-v2' and source.get('kind')=='gmsh_generated':
-        if sum(key in source for key in ('extent','boundary_path','roi_raster_path'))!=1:
+        if ('roi_raster_path' in source and source.get('roi_raster_path')==''
+                and not source.get('extent') and not source.get('boundary_path')):
+            guidance='Chọn ranh giới ROI: GeoTIFF/ASC, bộ SHP hoặc miền chữ nhật. '
+            guidance+=('DEM đã chọn dùng để tính relief.' if source.get('dem_raster_path')
+                       else 'Có thể chọn DEM để tính relief.')
+            raise ValueError(guidance)
+        domain_count=sum(bool(source.get(key)) for key in ('extent','boundary_path','roi_raster_path'))
+        if domain_count==0:
+            raise ValueError('Chọn ranh giới ROI: GeoTIFF/ASC, bộ SHP hoặc miền chữ nhật. '
+                             'DEM dùng để tính relief.')
+        if domain_count!=1:
             raise ValueError('Chỉ chọn một nguồn ROI: extent / SHP / raster')
         if source.get('sizing')=='uniform':
             if source.get('h_min_m')!=source.get('h_max_m'): raise ValueError('Uniform yêu cầu h_min = h_max: một kích thước mục tiêu h')
             if any(key in source for key in ('dem_raster_path','dem_band','relief_radius_m')):
                 raise ValueError('Uniform không dùng DEM, band DEM hoặc bán kính relief')
-    if config.get('schema_version')=='gis-workbench-run-config-v2' and config.get('cell_source',{}).get('sizing') in {'relief','sf1_relief'} and not config['cell_source'].get('dem_raster_path'):
+    if config.get('schema_version')=='gis-workbench-run-config-v2' and source.get('sizing') in {'relief','sf1_relief'} and not source.get('dem_raster_path'):
         raise ValueError('DEM required for relief sizing; chọn DEM và band cao độ')
     if config.get('schema_version')=='gis-workbench-run-config-v2' and source.get('sizing')=='sf1_relief':
         if source.get('dem_value_units')!='m':
@@ -94,7 +151,12 @@ def validate_config(config):
         schema['properties']['cell_source']['oneOf'][3]['properties']['roi_raster_path']={'type':'string','minLength':1}
     errors = sorted(jsonschema.Draft202012Validator(schema).iter_errors(config), key=lambda e: str(e.path))
     if errors:
-        raise ValueError('; '.join(f'{".".join(map(str,e.path)) or "config"}: {e.message}' for e in errors))
+        rendered=[]
+        for error in errors:
+            message=_friendly_schema_error(error)
+            if message not in rendered:rendered.append(message)
+            if len(rendered)==4:break
+        raise ValueError('; '.join(rendered))
 
 
 def prepare_cells(config):
@@ -118,7 +180,9 @@ def prepare_cells(config):
 
 def preflight(config):
     """Returns visible validation object and prepared immutable cells, or None."""
-    report = dict(status='fail', errors=[], cell_source_kind=config.get('cell_source',{}).get('kind'))
+    source=config.get('cell_source') if isinstance(config,dict) else None
+    report = dict(status='fail', errors=[],
+                  cell_source_kind=source.get('kind') if isinstance(source,dict) else None)
     cells = None
     try:
         validate_config(config)

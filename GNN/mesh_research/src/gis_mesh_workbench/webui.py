@@ -3,10 +3,12 @@ import argparse
 import copy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import re
 import secrets
 import sys
+import stat
 import threading
 from urllib.parse import urlsplit, parse_qs
 import uuid
@@ -43,13 +45,17 @@ class AccessError(ValueError): pass
 
 class WorkbenchServer(ThreadingHTTPServer):
     daemon_threads=True
-    def __init__(self,workspace=WORKSPACE,port=0,allow_roots=(),tutorial_preferences=None,recent_preferences=None,gmsh_preferences=None):
+    def __init__(self,workspace=WORKSPACE,port=0,allow_roots=(),tutorial_preferences=None,recent_preferences=None,gmsh_preferences=None,startup_project=None):
         self.workspace=Path(workspace).resolve(strict=True)
+        self.lock=threading.RLock()
+        self._startup_project_bytes=self._read_startup_project(startup_project)
+        self._startup_project_inflight=False
         self.sample_root=sample_directory()
         self.tutorial_preferences=tutorial_preferences
         self.recent_preferences=Path(recent_preferences) if recent_preferences is not None else self.workspace/'.scratch/gis-mesh-workbench/recent-files.json'
         self.gmsh_preferences=Path(gmsh_preferences) if gmsh_preferences is not None else self.workspace/'.scratch/gis-mesh-workbench/gmsh.json'
         self.native_picker=None
+        self.document_active=False
         self.picker_active=False
         self.selected_files=set()
         self.output_roots=tuple(dict.fromkeys([self.workspace]+[Path(p).resolve(strict=True) for p in allow_roots]))
@@ -60,16 +66,42 @@ class WorkbenchServer(ThreadingHTTPServer):
         self.session_dir.mkdir(parents=True,exist_ok=False)
         self.output_root=self.permitted(self.workspace/'.scratch/gis-mesh-workbench/ui-runs',exists=False,write=True)
         self.output_root.mkdir(parents=True,exist_ok=True)
-        self.lock=threading.RLock(); self.validated={}; self.jobs={}; self.controls={}; self.current_preflight=None
+        self.validated={}; self.jobs={}; self.controls={}; self.current_preflight=None
         self.preflight_generation=0; self.preflight_inflight=set()
         super().__init__(('127.0.0.1',port),Handler)
         self.host=f'127.0.0.1:{self.server_port}'; self.origin='http://'+self.host
+
+    @staticmethod
+    def _read_startup_project(path):
+        if path is None:return None
+        from .document_api import MAX_PROJECT_BYTES
+        candidate=Path(path).expanduser()
+        if candidate.suffix.lower()!='.mcy':
+            raise ValueError('Startup project must be a .mcy file.')
+        try:
+            if not stat.S_ISREG(candidate.lstat().st_mode):
+                raise ValueError('Startup project must be a regular file.')
+            resolved=candidate.resolve(strict=True)
+            with resolved.open('rb') as stream:
+                if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                    raise ValueError('Startup project must be a regular file.')
+                data=stream.read(MAX_PROJECT_BYTES+1)
+        except ValueError:raise
+        except OSError as error:
+            raise ValueError('Startup project cannot be read.') from error
+        if not data:raise ValueError('Startup project is empty.')
+        if len(data)>MAX_PROJECT_BYTES:raise ValueError('Startup project exceeds 64 MiB.')
+        return data
+
+    @property
+    def has_startup_project(self):
+        with self.lock:return self._startup_project_bytes is not None
 
     def saved_gmsh(self):
         return read_saved(self.gmsh_preferences)
 
     def _active_job_locked(self):
-        return any(job['status'] in {'running','stopping'} for job in self.jobs.values())
+        return self.document_active or any(job['status'] in {'running','stopping'} for job in self.jobs.values())
 
     def _invalidate_preflight_locked(self):
         self.preflight_generation+=1
@@ -490,6 +522,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(dict(roots=[str(p) for p in self.server.roots],output_roots=[str(p) for p in self.server.output_roots],output_root=str(self.server.output_root),
                     meshing_parameters=meshing_policy(),application_build=identity(),
                     mesh_limits=dict(max_cells=MAX_MESH_CELLS,interactive_cells=INTERACTIVE_CELL_LIMIT),
+                    has_startup_project=self.server.has_startup_project,
                     gmsh_path=gmsh_path,gmsh_saved=gmsh_saved,native_picker=self.server.native_picker is not None,
                     tutorial_seen=tutorial_seen(self.server.tutorial_preferences),
                     sample_raster=str(self.server.sample_root/'sample_10_30.tif'),
@@ -552,12 +585,48 @@ class Handler(BaseHTTPRequestHandler):
             path=urlsplit(self.path).path; self.guard(api=True,post=True)
             if self.headers.get('Transfer-Encoding'):
                 return self.respond(dict(error='Transfer-Encoding unsupported'),400)
+            if path=='/api/project/startup':
+                count=int(self.headers.get('Content-Length','0'))
+                if count!=0:return self.respond(dict(error='Startup project request must have an empty body.'),400)
+                with self.server.lock:
+                    if self.server._startup_project_bytes is None:
+                        return self.respond(dict(error='No startup project is pending.'),404)
+                    if self.server._startup_project_inflight:
+                        return self.respond(dict(error='Startup project is already opening.'),409)
+                    self.server._startup_project_inflight=True
+                    raw=self.server._startup_project_bytes
+                try:
+                    from .document_api import open_project
+                    result=open_project(self.server,raw)
+                except BaseException:
+                    with self.server.lock:self.server._startup_project_inflight=False
+                    raise
+                with self.server.lock:
+                    self.server._startup_project_bytes=None
+                    self.server._startup_project_inflight=False
+                return self.respond(result)
+            if path=='/api/project/open':
+                from .document_api import MAX_PROJECT_BYTES, open_project
+                if self.headers.get_content_type()!='application/octet-stream':
+                    return self.respond(dict(error='application/octet-stream required'),415)
+                count=int(self.headers.get('Content-Length','0'))
+                if not 0<count<=MAX_PROJECT_BYTES:
+                    return self.respond(dict(error='Project body size limit'),413)
+                raw=self.rfile.read(count);self.body_consumed=True
+                return self.respond(open_project(self.server,raw))
             if self.headers.get_content_type()!='application/json':
                 return self.respond(dict(error='application/json required'),415)
             count=int(self.headers.get('Content-Length','0'))
             if not 0<count<=65536: return self.respond(dict(error='Request body size limit'),413)
             raw=self.rfile.read(count); self.body_consumed=True
             data=json.loads(raw,parse_constant=lambda value: (_ for _ in ()).throw(ValueError('nonfinite JSON')))
+            if path=='/api/project/save':
+                from .document_api import save_project
+                return self.respond(save_project(self.server,data),content_type='application/zip',filename='MeshCherry.mcy')
+            if path=='/api/export':
+                from .document_api import export_result
+                body,mime,filename=export_result(self.server,data)
+                return self.respond(body,content_type=mime,filename=filename)
             if path=='/api/picker': return self.respond(self.server.choose_native(data))
             if path=='/api/recent': return self.respond(self.server.recent_action(data))
             if path=='/api/input-preview':

@@ -16,3 +16,4 @@ build/
 
 # Local portable candidates are distributed separately from source.
 /MeshCherry/
+**/graphify-out/

@@ -32,6 +32,19 @@ class GeneratedGmshTests(unittest.TestCase):
     def test_reject_missing_executable(self):
         with self.assertRaises(FileNotFoundError): inspect_executable(self.root/'gmsh.exe')
 
+    def test_gmsh_subprocess_output_preserves_unicode_and_replaces_bad_bytes(self):
+        from gis_mesh_workbench.gmsh_meshing import _decode_gmsh_output
+        decoded=_decode_gmsh_output(b'Gmsh '+bytes([0xe1,0xbb,0x87])+b' '+bytes([0xff])+b' output')
+        self.assertEqual(decoded,'Gmsh ệ \ufffd output')
+        self.assertEqual(_decode_gmsh_output('Gmsh ệ \udc00 output'),'Gmsh ệ \ufffd output')
+        self.assertFalse(any(0xD800<=ord(char)<=0xDFFF for char in decoded))
+        executable=self.root/'gmsh.exe';executable.write_bytes(b'fixture')
+        with patch('gis_mesh_workbench.gmsh_meshing.subprocess.run',
+                   return_value=subprocess.CompletedProcess([],0,b'4.15.2\xff',b'')):
+            with self.assertRaisesRegex(ValueError,'4.15.2') as raised:
+                inspect_executable(executable)
+        self.assertNotIn('\\udc',str(raised.exception))
+
     def test_relief_dem_and_extraction_raster_may_be_different(self):
         if not EXE.is_file():self.skipTest('External Gmsh is not installed')
         other=self.root/'attributes.tif'

@@ -32,4 +32,9 @@ def artifact_view(name, data):
     elif name == 'qa' and 'mesh_quality' in data:
         # Per-cell centres remain in the downloadable QA, not the summary panel.
         result['mesh_quality'] = {key:value for key,value in data['mesh_quality'].items() if key != 'centres'}
+        if isinstance(data.get('historical_qa'),dict):
+            history=dict(data['historical_qa'])
+            if isinstance(history.get('mesh_quality'),dict):
+                history['mesh_quality']={key:value for key,value in history['mesh_quality'].items() if key!='centres'}
+            result['historical_qa']=history
     return result

@@ -1,6 +1,35 @@
 # Mesh Cherry — GIS mesh workbench
 
-## Hành vi hiện tại — ứng viên 2.9.1
+## Hành vi hiện tại — MeshCherry 3.0 RC8
+
+Bản 3.0 RC8 đóng gói các chức năng mesh-first và sửa lỗi đã kiểm thử trong
+nguồn 2.9.1. Đây là bản thử trước phát hành ổn định; nghiệm thu cửa sổ Windows
+và máy sạch vẫn cần được thực hiện trên đúng EXE này.
+
+Khi bấm Tiếp hoặc điều hướng giữa các bước, giao diện đưa đầu mục đang chọn
+vào khung nhìn. Tùy chọn giảm chuyển động của hệ thống được tôn trọng; khôi phục
+kết quả nền giữ nguyên vị trí xem. Bản nguồn Git không đồng nghĩa các chức năng
+này đã có trong bản binary v2.0.0 được phát hành trước đây.
+
+Tệp `.mcy` có thể đăng ký icon và thao tác nhấp đúp bằng
+`Dang-ky-tep-MCY.cmd` trong bản portable. Đăng ký/gỡ là thao tác chủ động,
+chỉ ghi cho tài khoản Windows hiện tại và giữ nguyên liên kết của ứng dụng khác.
+
+### Dự án .mcy và xuất dữ liệu
+
+- **Lưu dự án**: lưu lưới đã chấp nhận, CRS, ID ô, thuộc tính, QA lịch sử,
+  tham số và trạng thái xem thành gói `.mcy`. Giới hạn 64 MiB nén / 128 MiB giải nén.
+- **Mở dự án**: xem kết quả ngoại tuyến mà không đọc lại raster/ROI hay chạy Gmsh.
+  Các đường dẫn và thông tin xác thực không được mang sang dự án. Muốn extract
+  mới, người dùng chọn lại raster. QA hình học được tính lại; hồ sơ QA cũ hiển
+  thị riêng dưới nhãn kết quả đã lưu, không coi là một lần chạy nghiên cứu mới.
+- **GeoJSON**: polygon ô và thuộc tính, chuyển tọa độ sang WGS84 (kinh độ, vĩ độ).
+- **GeoTIFF / ASC + PRJ**: chọn độ phân giải theo mét và giá trị NoData. Lấy mẫu
+  giá trị ô tại tâm pixel đầu ra; đây là raster hóa xấp xỉ, không phải chuyển đổi
+  bảo toàn hình học. Giới hạn một triệu pixel. Tổng lượng extensive chưa được
+  raster hóa; xuất vector/JSON để tránh nhân sai tổng. ASC tải trong ZIP cùng `.prj`.
+- CSV/JSON thuộc tính và MSH/mesh JSON vẫn có khi lượt chạy tương ứng đã tạo chúng.
+  `.mcy` không đóng gói nguyên bản MSH hay tệp đầu vào.
 
 Quy trình: chọn miền ROI → chọn cách và kích thước lưới → kiểm tra cấu hình →
 tạo và xem chất lượng lưới → tùy chọn extract raster lên các ô đã lưu.
