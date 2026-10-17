@@ -35,7 +35,7 @@ test('imported .mcy mesh, newly selected extraction raster, and button reach ext
     if(url==='/api/project/open')return{ok:true,json:async()=>({job_id:'saved-mesh-123',has_attributes:false})};
     throw Error('unexpected fetch '+url);
   };
-  t.run(`api=async(path,body)=>{
+  t.run(`sourceReads=0;api=async(path,body)=>{
     calls.push({path,body});
     if(path.includes('id=extract-job-123&name=manifest'))return{operation:'extract',runtime_seconds:1,engine_evidence:{pixels_read:4,windows_read:1,candidate_pairs:1,memory_metric:{value:1024}}};
     if(path.includes('id=extract-job-123&name=cells'))return{cells:[{cell_id:'cell-1',kind:'rectangle',xy:[[0,0],[1,0],[1,1],[0,1]]}],display:{cell_count:1}};
@@ -45,10 +45,10 @@ test('imported .mcy mesh, newly selected extraction raster, and button reach ext
     if(path.startsWith('/api/job-log?id=extract-job-123'))return{text:'',next_cursor:0};
     if(path==='/api/job?id=saved-mesh-123')return{status:'pass',result:{output:'runs/saved-mesh'}};
     if(path.includes('name=manifest'))return{status:'pass',operation:'mesh_only',geometry_digest:'saved-digest'};
-    if(path.includes('name=cells'))return{status:'pass',crs_wkt:'EPSG:32649',cells:[{cell_id:'cell-1',kind:'rectangle',xy:[[0,0],[1,0],[1,1],[0,1]]}],display:{cell_count:1500}};
+    if(path.includes('name=cells'))return{status:'pass',crs_wkt:'EPSG:32649',cells:[{cell_id:'cell-1',kind:'rectangle',xy:[[0,0],[1,0],[1,1],[0,1]]}],display:{cell_count:1001}};
     if(path.includes('name=qa'))return{status:'pass',mesh_quality:{cell_count:1}};
     if(path==='/api/recent')return{items:[]};
-    if(path==='/api/source')return{display_footprint:{xy:[[0,0],[1,0],[1,1],[0,1]],bounds:[0,0,1,1]}};
+    if(path==='/api/source'){sourceReads++;if(sourceReads===2)throw Object.assign(Error('raster source metadata not found'),{status:404});return{display_footprint:{xy:[[0,0],[1,0],[1,1],[0,1]],bounds:[0,0,1,1]}};}
     if(path==='/api/preflight')return{preflight_id:'preflight-extract-123',report:{status:'pass',operation:'extract',cell_count:1,pixel_count:4,workload_estimate:{estimated_pixels_read:4,estimated_windows_read:1},geometry_digest:'extract-digest'}};
     if(path==='/api/run')return{job_id:'extract-job-123',operation:'extract'};
     throw Error('unexpected api '+path);
@@ -66,7 +66,7 @@ test('imported .mcy mesh, newly selected extraction raster, and button reach ext
   assert.ok(preflight,'Extract click must reach preflight; calls='+JSON.stringify(t.calls)+'; error='+t.get('validation').textContent+'; mesh='+t.run('meshSnapshot?.jobId'));
   assert.deepEqual(JSON.parse(JSON.stringify(preflight.body)),{
     schema_version:'gis-workbench-run-config-v2',operation:'extract',extraction_engine:'indexed_windowed_v1',run_name:'mesh-cherry-extract',analysis_crs:'EPSG:32649',raster_path:'D:/inputs/fresh.asc',band:1,semantics:'intensive',value_units:'m',output_root:'',edge_subdivisions:8,
-    cell_source:{kind:'frozen_cells',path:'runs/saved-mesh/cells.json',geometry_digest:'saved-digest',max_cells:1500}
+    cell_source:{kind:'frozen_cells',path:'runs/saved-mesh/cells.json',geometry_digest:'saved-digest',max_cells:1001}
   });
   const run=t.calls.find(call=>call.path==='/api/run');
   assert.ok(run,'passing extract preflight must reach startRun');
@@ -78,6 +78,12 @@ test('imported .mcy mesh, newly selected extraction raster, and button reach ext
   assert.equal(t.get('csv').hidden,false,'extract result artifact flow failed: '+t.get('job-status').textContent+'; calls='+JSON.stringify(t.calls));
   assert.equal(t.run('attrs.get("cell-1").value'),3);
   assert.match(t.get('extract-status').textContent,/Hoàn thành|trích|extract/i);
+  assert.match(t.get('job-status').textContent,/footprint hiển thị/,'metadata-only 404 must be visible without discarding validated results');
+  assert.equal(t.get('csv').hidden,false,'validated extract export remains available when optional footprint metadata is missing');
+  assert.equal(t.get('json').hidden,false);
+  const limitRow=container=>container.children.flatMap(list=>list.children).find(pair=>pair.children[0]?.textContent==='Giới hạn');
+  assert.match(limitRow(t.get('validation')).children[1].textContent,/1001 ô/);
+  assert.match(limitRow(t.get('extract-detail-content')).children[1].textContent,/1001 ô/);
 });
 
 test('failed extraction preflight returns a visible result beside the button and never starts a job',async()=>{
