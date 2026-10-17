@@ -1,10 +1,11 @@
 # Mesh Cherry — GIS mesh workbench
 
-## Hành vi hiện tại — MeshCherry 3.0 RC9
+## Hành vi hiện tại — MeshCherry 3.0.0
 
-Bản 3.0 RC9 đóng gói các chức năng mesh-first và sửa lỗi đã kiểm thử trong
-nguồn 2.9.1. Đây là bản thử trước phát hành ổn định; nghiệm thu cửa sổ Windows
-và máy sạch vẫn cần được thực hiện trên đúng EXE này.
+Bản 3.0.0 chính thức đóng gói quy trình mesh-first, trích thuộc tính, so sánh
+lưới, lưu dự án và các sửa lỗi đã phản biện ở RC11. Việc nâng phiên bản không
+thay đổi thuật toán khoa học. Nghiệm thu tương tác cửa sổ Windows và máy sạch
+vẫn đang chờ; xem hồ sơ VALIDATION.json đi kèm bản phát hành.
 
 Khi bấm Tiếp hoặc điều hướng giữa các bước, giao diện đưa đầu mục đang chọn
 vào khung nhìn. Tùy chọn giảm chuyển động của hệ thống được tôn trọng; khôi phục

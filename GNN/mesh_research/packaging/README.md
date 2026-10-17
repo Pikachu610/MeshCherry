@@ -1,6 +1,10 @@
-# MeshCherry 3.0 RC11 — Windows build and acceptance
+# MeshCherry 3.0.0 — Windows build and acceptance
 
-Application identity: `3.0.0rc11`; candidate tag: `v3.0.0-rc.11`.
+Application identity: `3.0.0`; official release tag: `v3.0.0`.
+The maintainer explicitly selected the official release channel. This promotion
+changes version/documentation only; native-window and clean-machine acceptance
+remain pending and are disclosed in VALIDATION.json and release notes.
+The following RC11 fixes are retained in 3.0.0.
 RC11 addresses final extraction-review findings: accepted imported meshes use their
 own bounded extraction cap; artifact recovery terminates on permanent errors and
 after a bounded number of transient failures; controls recover without publishing
@@ -23,8 +27,8 @@ The candidate also adds explicit per-user `.mcy` file association and bounded
 startup project opening. Registration checks effective Windows ownership;
 unregistration preserves unowned/nonempty keys. Explorer operation is a manual
 acceptance gate; mocked registry tests do not establish native-shell behavior.
-Native-window and clean-machine acceptance remain explicit gates
-for stable 3.0; automated verification permits only the RC prerelease.
+Native-window and clean-machine acceptance are distinct from automated verification
+and must not be reported as passed without actual interaction on the target build.
 
 The 2.9.1 source candidate repairs the source-audit regressions: job-control
 responsiveness during preflight, request-specific main-run recovery, cancelled
@@ -85,7 +89,7 @@ py -3.12 -m venv .scratch/gis-mesh-workbench/build-env-300
 $env:PYTHONPATH = (Resolve-Path './GNN/mesh_research/src').Path
 .scratch/gis-mesh-workbench/build-env-300/Scripts/python.exe -m unittest discover -s GNN/mesh_research/tests -t GNN/mesh_research -p 'test_workbench*.py'
 node --test GNN/mesh_research/tests/workbench_ui_state.test.cjs GNN/mesh_research/tests/workbench_recovery_regressions.test.cjs
-.scratch/gis-mesh-workbench/build-env-300/Scripts/python.exe -m PyInstaller GNN/mesh_research/packaging/MeshCherry.spec --distpath MeshCherry/MeshCherry-Desktop-v3.0.0-rc8 --workpath .scratch/gis-mesh-workbench/build-v300-rc8
+.scratch/gis-mesh-workbench/build-env-300/Scripts/python.exe -m PyInstaller GNN/mesh_research/packaging/MeshCherry.spec --distpath MeshCherry/MeshCherry-Desktop-v3.0.0 --workpath .scratch/gis-mesh-workbench/build-v300-official
 ```
 
 The workbench tests are the application suite. The full `test_*.py` discovery in
@@ -112,8 +116,9 @@ are supported; ASC needs a declared source CRS, normally its same-name `.prj`.
 ROI, DEM, optional resolution reference and extraction raster have independent roles.
 
 Preserve every previous release directory. Do not reuse an occupied dist/build
-directory for an acceptance candidate. Full package/source parity, exact EXE smoke,
-native Windows interaction and clean-account/machine tests gate publication.
+directory for an acceptance candidate. Verify package/source parity and exact EXE
+smoke for each published binary. Record native Windows and clean-account/machine
+acceptance separately; publication does not convert pending checks into passes.
 
 ## Desktop operation and diagnostics
 

@@ -1,15 +1,40 @@
 # MeshCherry — Windows desktop
 
-## MeshCherry 3.0 RC11 — Windows prerelease
+## MeshCherry 3.0.0 — bản phát hành chính thức
 
-Application version: `3.0.0rc11`. Xem [ghi chú RC11](RELEASE_V3.0.0-RC11.md),
-[bản tải Windows](https://github.com/Pikachu610/MeshCherry/releases/tag/v3.0.0-rc.11)
-và [hướng dẫn đóng gói](GNN/mesh_research/packaging/README.md).
-Giải nén toàn bộ ZIP rồi mở `MeshCherry/MeshCherry.exe`; giữ thư mục `_internal`
-bên cạnh EXE. Cần Windows x64 và WebView2; Gmsh cài riêng.
+Ứng dụng desktop Windows dành cho nghiên cứu GIS: tạo lưới, kiểm tra chất lượng,
+trích thuộc tính raster, so sánh cách biểu diễn và lưu dự án để mở lại.
 
-RC11 là ứng viên thử nghiệm, chưa nghiệm thu đầy đủ giao diện Windows/máy sạch. Bản ổn định
-cũ v2.0.0 được giữ lại để đối chiếu. Chỉ số test không thay thế nghiệm thu desktop.
+[Tải Windows x64](https://github.com/Pikachu610/MeshCherry/releases/tag/v3.0.0)
+· [Danh sách tính năng và cách dùng](RELEASE_V3.0.0.md)
+· [Hướng dẫn build](GNN/mesh_research/packaging/README.md)
+· [MIT License](LICENSE)
+
+| Nhóm công cụ | Chức năng |
+| --- | --- |
+| Miền và dữ liệu | ROI shapefile Polygon `.shp/.shx/.dbf/.prj`, footprint GeoTIFF/ASC hoặc miền chữ nhật; xem trước và metadata CRS/độ phân giải. |
+| Tạo lưới | Lưới vuông/chữ nhật, Gmsh tam giác đều hoặc thích nghi theo local relief; nhập mesh JSON; hồ sơ địa hình SF-1 phục vụ thử nghiệm. |
+| Chất lượng và hiển thị | Kiểm tra hình học, độ phủ, chất lượng ô; pan/zoom, chọn ô và xem thuộc tính. |
+| Trích thuộc tính | Intensive trung bình diện tích, extensive phân bổ tổng lượng, categorical tỷ phần lớp; coverage và NoData tách riêng. |
+| So sánh | Vuông–tam giác trên cùng miền/raster; số ô, RMSE/MAE/bias hoặc bảo toàn tổng/tỷ phần lớp theo loại dữ liệu. |
+| Quản lý tác vụ | Log Gmsh, tiến độ công đoạn, thời gian đã chạy, Dừng và phục hồi; ETA khi đủ số đo. |
+| Dự án và xuất | `.mcy`, CSV/JSON, mesh JSON/MSH khi có; GeoJSON và raster hóa GeoTIFF/ASC+PRJ cho thuộc tính phù hợp. |
+
+### Bắt đầu
+
+1. Giải nén toàn bộ ZIP, mở `MeshCherry/MeshCherry.exe`; giữ `_internal` cạnh EXE.
+2. Mở `test-data/triangle-example.mcy` để xem nhanh kết quả mẫu.
+3. Chọn ROI → cấu hình lưới/Gmsh → kiểm tra và tạo lưới → xem chất lượng.
+4. Chọn raster trong tab Extract → chọn band, đơn vị, loại thuộc tính → chạy và lưu/xuất.
+
+Yêu cầu Windows x64 và WebView2; Python đã đóng gói. Cài Gmsh riêng từ
+[gmsh.info](https://gmsh.info/), chọn executable và kiểm tra phiên bản trong ứng dụng.
+EXE chưa ký số. Hồ sơ kiểm chứng/checksum đi kèm release; tương tác Windows/Explorer
+và máy sạch vẫn chờ nghiệm thu. Các chỉ số so sánh đo biểu diễn raster, chưa xác nhận
+hiệu quả mô hình thủy văn/GNN. Raster xuất lấy mẫu tâm pixel, giới hạn 1 triệu pixel;
+không raster hóa tổng lượng extensive. Xem release notes để chọn định dạng phù hợp.
+
+Nguồn, tag và gói RC11/v2.0.0 được giữ nguyên trong lịch sử phát hành.
 
 ## Nền tảng mã nguồn 2.9.1
 
