@@ -195,4 +195,3 @@ test('temporary terminal artifact failure retries and eventually publishes a com
   assert.equal(t.get('csv').hidden,false);
   assert.match(t.get('extract-status').textContent,/Sẵn sàng xuất CSV \/ JSON/);
 });
-
