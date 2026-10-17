@@ -1,8 +1,8 @@
 # Mesh Cherry — GIS mesh workbench
 
-## Hành vi hiện tại — MeshCherry 3.0 RC8
+## Hành vi hiện tại — MeshCherry 3.0 RC9
 
-Bản 3.0 RC8 đóng gói các chức năng mesh-first và sửa lỗi đã kiểm thử trong
+Bản 3.0 RC9 đóng gói các chức năng mesh-first và sửa lỗi đã kiểm thử trong
 nguồn 2.9.1. Đây là bản thử trước phát hành ổn định; nghiệm thu cửa sổ Windows
 và máy sạch vẫn cần được thực hiện trên đúng EXE này.
 
@@ -10,6 +10,13 @@ Khi bấm Tiếp hoặc điều hướng giữa các bước, giao diện đưa 
 vào khung nhìn. Tùy chọn giảm chuyển động của hệ thống được tôn trọng; khôi phục
 kết quả nền giữ nguyên vị trí xem. Bản nguồn Git không đồng nghĩa các chức năng
 này đã có trong bản binary v2.0.0 được phát hành trước đây.
+
+Local relief/SF-1 có khung xem trước DEM riêng ở bước 2, bên cạnh cấu hình trên
+màn hình rộng. Chọn DEM `.tif`, `.tiff` hoặc ESRI ASCII Grid `.asc` để xem band,
+CRS và kích thước pixel nguồn; thay band sẽ cập nhật ảnh. ASC dùng `.prj` cùng
+tên, cùng thư mục để khai báo CRS. Nguồn chưa có CRS vẫn xem được ảnh và có cảnh
+báo; quy trình chia lưới vẫn yêu cầu CRS nguồn. Ảnh giảm mẫu và thang màu P2–P98
+chỉ phục vụ hiển thị, không đổi DEM, miền ROI hoặc phép tính relief.
 
 Tệp `.mcy` có thể đăng ký icon và thao tác nhấp đúp bằng
 `Dang-ky-tep-MCY.cmd` trong bản portable. Đăng ký/gỡ là thao tác chủ động,

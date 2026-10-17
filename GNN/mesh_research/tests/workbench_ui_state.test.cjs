@@ -17,7 +17,7 @@ function setup(){
     querySelectorAll(selector){const descendants=this.children.flatMap(c=>[c,...c.querySelectorAll(selector)]);return descendants.filter(c=>selector==='[data-id]'?c.dataset.id:selector==='input,select,button'?false:(c.attributes.class||'').split(' ').includes(selector.slice(1)));}
   }
   const get=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
-  get('crs').value='EPSG:32649';get('band').value='1';get('raster').value='a.tif';get('mode').value='structured_grid';
+  get('crs').value='EPSG:32649';get('band').value='1';get('dem-band').value='1';get('gmsh-sizing').value='uniform';get('raster').value='a.tif';get('mode').value='structured_grid';
   const timers=[];
   const urls={created:[],revoked:[],createObjectURL(blob){this.created.push(blob);return 'blob:preview-'+this.created.length;},revokeObjectURL(url){this.revoked.push(url);}};
   const context=vm.createContext({document:{getElementById:get,createElement:()=>new Element(),createElementNS:()=>new Element(),querySelector:selector=>get(selector),querySelectorAll:()=>[],body:{dataset:{}}},window:{matchMedia:()=>({matches:false})},location:{hash:'',pathname:'/',reload(){this.reloads=(this.reloads||0)+1;}},sessionStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,String(value)),removeItem:key=>storage.delete(key)},URL:urls,Blob,atob,Uint8Array,URLSearchParams,history:{},coach:{update(){}},setTimeout:callback=>{timers.push(callback);return timers.length;},clearTimeout(){},console,fetch(){throw Error('mock API not configured');}});
@@ -355,6 +355,85 @@ test('invalid preview never becomes an image source',async()=>{
   t.run("api=async()=>({image:'data:image/svg+xml,<svg/>',crs:'EPSG:32649'})");await t.run('loadInputPreview()');
   assert.equal(t.urls.created.length,0);assert.equal(t.get('input-preview-image').hidden,true);
   assert.match(t.get('input-preview-status').textContent,/Không dựng được/);
+});
+
+test('selecting a local-relief DEM previews GeoTIFF or ASC in Step 2 without navigating or replacing the ROI preview',async()=>{
+  const t=setup();t.context.calls=[];t.get('dem-raster').value='';t.get('gmsh-sizing').value='relief';t.run("currentStage=2;$('mode').value='gmsh_generated';api=async(path,payload)=>{calls.push({path,payload});return {image:'data:image/png;base64,iVBORw0KGgo=',crs:'EPSG:32649',crs_defined:true,band:1,source_shape:[600,800],pixel_size:[30,30],coordinate_units:'m',nodata:-9999};};refreshRecent=async()=>{};invalidate=()=>{};clearSourceFieldError=()=>{};");
+  t.run("previewKey='roi-preview';");await t.run("acceptSelectedSource('dem-raster','D:/data/relief.asc')");
+  assert.equal(t.run('currentStage'),2);assert.equal(t.get('raster').value,'a.tif');assert.equal(t.run('previewKey'),'roi-preview');
+  assert.equal(t.context.calls[0].path,'/api/input-preview');assert.equal(t.context.calls[0].payload.path,'D:/data/relief.asc');assert.equal(t.context.calls[0].payload.kind,'raster');assert.equal(t.context.calls[0].payload.band,1);assert.equal(t.context.calls[0].payload.analysis_crs,'EPSG:32649');
+  assert.equal(t.get('dem-preview').hidden,false);assert.equal(t.get('dem-preview-image').src,'blob:preview-1');
+  assert.match(t.run("$('dem-preview-meta').children[0].children.map(row=>row.children.map(cell=>cell.textContent).join(':')).join('|')"),/Tệp:relief\.asc.*CRS:EPSG:32649.*Band:1.*Kích thước:800 × 600 px.*Kích thước pixel:30 × 30 m.*NoData:-9999/);
+  assert.match(t.get('dem-preview-caption').textContent,/P2–P98/);
+});
+
+test('DEM band changes refresh the preview and late prior responses are discarded',async()=>{
+  const t=setup();t.context.pending=[];t.get('dem-raster').value='elevation.tif';t.get('gmsh-sizing').value='sf1_relief';
+  t.run("currentStage=2;$('mode').value='gmsh_generated';api=(_path,payload)=>new Promise(resolve=>pending.push({band:payload.band,resolve}));");
+  const first=t.run('loadDemPreview()');t.get('dem-band').value='2';t.get('dem-band').handlers.input();const second=t.get('dem-band').handlers.change();
+  t.context.pending[1].resolve({image:'data:image/png;base64,iVBORw0KGgo=',crs:'EPSG:32649',band:2,source_shape:[10,20]});await second;
+  t.context.pending[0].resolve({image:'data:image/png;base64,iVBORw0KGgo=',crs:'EPSG:32649',band:1,source_shape:[10,20]});await first;
+  assert.equal(t.get('dem-preview-image').src,'blob:preview-1');assert.match(t.run("$('dem-preview-meta').children[0].children.map(row=>row.children.map(cell=>cell.textContent).join(':')).join('|')"),/Band:2/);assert.equal(t.urls.created.length,1);
+});
+
+test('clearing the DEM path removes its preview and invalidates pending responses',async()=>{
+  const t=setup();t.get('dem-raster').value='elevation.asc';t.get('gmsh-sizing').value='relief';
+  t.run("currentStage=2;$('mode').value='gmsh_generated';api=()=>new Promise(done=>pendingResolve=done)");const pending=t.run('loadDemPreview()');
+  t.get('dem-raster').value='';t.get('dem-raster').handlers.input();t.run("pendingResolve({image:'data:image/png;base64,iVBORw0KGgo=',crs:'EPSG:32649',band:1})");await pending;
+  assert.equal(t.get('dem-preview').hidden,true);assert.equal(t.get('dem-preview-image').hidden,true);assert.equal(t.urls.created.length,0);
+});
+
+test('typed DEM path change clears previous metadata while the new preview is loading',async()=>{
+  const t=setup();t.get('dem-raster').value='first.tif';t.get('gmsh-sizing').value='relief';t.context.pending=[];
+  t.run("currentStage=2;$('mode').value='gmsh_generated';api=(_path,payload)=>payload.path==='first.tif'?Promise.resolve({image:'data:image/png;base64,iVBORw0KGgo=',crs:'EPSG:32649',band:1,source_shape:[5,6]}):new Promise(resolve=>pending.push(resolve));");
+  await t.get('dem-raster').handlers.change();assert.match(t.run("$('dem-preview-meta').children[0].children[0].children[1].textContent"),/first\.tif/);
+  t.get('dem-raster').value='second.asc';t.get('dem-raster').handlers.input();
+  assert.equal(t.get('dem-preview-meta').children.length,0);assert.equal(t.get('dem-preview-image').hidden,true);
+  const loading=t.get('dem-raster').handlers.change();
+  assert.equal(t.get('dem-preview-status').textContent,'Đang dựng hình DEM…');assert.equal(t.get('dem-preview-meta').children.length,0);assert.equal(t.get('dem-preview-caption').textContent,'');
+  t.context.pending[0]({image:'data:image/png;base64,iVBORw0KGgo=',crs:'EPSG:32649',band:1,source_shape:[7,8]});await loading;
+  assert.match(t.run("$('dem-preview-meta').children[0].children[0].children[1].textContent"),/second\.asc/);
+});
+
+test('blank or invalid DEM band clears stale preview and reports an actionable error without requesting',async()=>{
+  const t=setup();t.get('dem-raster').value='elevation.tif';t.get('gmsh-sizing').value='relief';t.context.calls=[];
+  t.run("currentStage=2;$('mode').value='gmsh_generated';api=async(path,payload)=>{calls.push({path,payload});return {image:'data:image/png;base64,iVBORw0KGgo=',crs:'EPSG:32649',band:payload.band};};");
+  await t.get('dem-raster').handlers.change();assert.equal(t.context.calls.length,1);
+  for(const value of ['', 'abc', '1.5', '0']){
+    t.get('dem-band').value=value;t.get('dem-band').handlers.input();
+    await assert.doesNotReject(t.get('dem-band').handlers.change());
+    assert.equal(t.get('dem-preview-image').hidden,true);assert.equal(t.get('dem-preview-meta').children.length,0);
+    assert.match(t.get('dem-band-error').textContent,/Nhập band DEM là số nguyên dương/);assert.equal(t.get('dem-band-error').hidden,false);
+    assert.equal(t.context.calls.length,1);
+  }
+  assert.deepEqual(t.urls.revoked,['blob:preview-1']);
+  t.get('dem-band').value='2';t.get('dem-band').handlers.input();await t.get('dem-band').handlers.change();
+  assert.equal(t.get('dem-band-error').hidden,true);assert.equal(t.get('dem-band').getAttribute('aria-invalid'),'false');
+  assert.equal(t.get('dem-preview-image').src,'blob:preview-2');assert.equal(t.context.calls.length,2);
+});
+
+test('DEM preview is hidden and its object URL released outside Step 2 or in uniform mode',async()=>{
+  const t=setup();t.get('dem-raster').value='elevation.tif';t.get('gmsh-sizing').value='relief';t.run("currentStage=2;$('mode').value='gmsh_generated';api=async()=>({image:'data:image/png;base64,iVBORw0KGgo=',crs:'EPSG:32649',band:1});");
+  await t.run('loadDemPreview()');assert.equal(t.get('dem-preview').hidden,false);assert.equal(t.urls.created.length,1);
+  t.get('gmsh-sizing').value='uniform';await t.run('loadDemPreview()');
+  assert.equal(t.get('dem-preview').hidden,true);assert.deepEqual(t.urls.revoked,['blob:preview-1']);
+  t.get('gmsh-sizing').value='relief';t.run('currentStage=2');await t.run('loadDemPreview()');t.run('currentStage=1');await t.run('loadDemPreview()');
+  assert.equal(t.get('dem-preview').hidden,true);assert.deepEqual(t.urls.revoked,['blob:preview-1','blob:preview-2']);
+});
+
+test('out-of-range extract band has a readable Vietnamese message',()=>{
+  const t=setup();assert.match(t.run("readableExtractError('Resolution reference band out of range')"),/Band đã chọn không có/);
+});
+
+test('result log and extract tabs remain read-only navigable while a job is busy',()=>{
+  const t=setup();t.run("busy=true;jobId='extract-owned';meshSnapshot={digest:'unchanged'};savedMap=null;showResultTab('log');");
+  assert.equal(t.run('resultTab'),'log');assert.equal(t.run('jobId'),'extract-owned');
+  assert.equal(t.get('result-log-tab').getAttribute('aria-selected'),'true');
+  assert.equal(t.get('result-log-panel').hidden,false);assert.equal(t.get('mesh-result-panel').hidden,true);assert.equal(t.get('extract-result-panel').hidden,true);
+  t.run("showResultTab('extract');");assert.equal(t.run('resultTab'),'extract');
+  assert.equal(t.get('extract-result-panel').hidden,false);assert.equal(t.get('result-log-panel').hidden,true);assert.equal(t.get('mesh-result-panel').hidden,true);
+  assert.equal(t.run('meshSnapshot.digest'),'unchanged');assert.equal(t.run('busy'),true);
+  t.run("showResultTab('mesh');");assert.equal(t.get('mesh-result-panel').hidden,false);assert.equal(t.get('extract-result-panel').hidden,true);assert.equal(t.get('result-log-panel').getAttribute('aria-hidden'),'true');
 });
 
 test('2001 cells remain visible and selectable without per-cell SVG allocation',()=>{

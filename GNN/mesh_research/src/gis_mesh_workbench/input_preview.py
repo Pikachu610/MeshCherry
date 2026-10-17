@@ -42,7 +42,15 @@ def raster_preview(path, band=1):
             figure.colorbar(artist,ax=axis,pad=.03,shrink=.8,label=f'Band {band} (raw)')
         else:axis.text(.5,.5,'No valid pixels',ha='center',transform=axis.transAxes)
         axis.set_xlim(bounds[0],bounds[2]);axis.set_ylim(bounds[1],bounds[3])
+        units='unknown' if src.crs is None else ('degree' if src.crs.is_geographic else src.crs.linear_units)
+        if units in {'metre','meter','metres','meters'}:units='m'
+        nodata=src.nodata
         report=dict(kind='raster',crs=crs,band=band,bounds=bounds,
+            crs_defined=src.crs is not None,driver=src.driver,
+            pixel_size=[math.hypot(src.transform.a,src.transform.d),
+                        math.hypot(src.transform.b,src.transform.e)],
+            coordinate_units=units,
+            nodata=float(nodata) if nodata is not None and math.isfinite(nodata) else None,
             source_shape=[src.height,src.width],display_shape=[height,width],
             sampled=scale<1,stretch='P2-P98 display only',no_valid_samples=not bool(valid.size))
     axis.set_aspect('equal',adjustable='box');axis.set_xlabel('X');axis.set_ylabel('Y')

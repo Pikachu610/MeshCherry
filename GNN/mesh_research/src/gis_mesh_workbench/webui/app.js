@@ -13,14 +13,18 @@ const RUN_REQUEST_STORAGE_KEY='mesh-cherry-run-request';
 const ACCEPTED_MESH_STORAGE_KEY='mesh-cherry-accepted-mesh';
 let runRequest=null;
 let pickerTarget='raster',pickerPath='';
-let gmshVerified=null,meshSnapshot=null,extractMode=false;
+let gmshVerified=null,meshSnapshot=null,extractMode=false,extractChecking=false;
 let plannedSource=null,plannedRequest=0;
 let sourceRequest=0,boundaryRequest=0,gmshRequest=0,toastTimer=null,selectedCellId=null;
 let mapDrag=null,mapSuppressClick=false;
 let batchedMap=null;
 let previewRequest=0,previewKey='',previewURL=null,savedMap=null,resultTab='mesh';
+let demPreviewRequest=0,demPreviewKey='',demPreviewURL=null;
 let jobLogCursor=0,monitorJobId=null,cancelPending=false;
 let comparisonReport=null,comparisonJobId=null,comparisonRequest=0,comparisonRequestKey='',comparisonReadFailures=0;
+let terminalArtifactFailureJobId=null,terminalArtifactFailureCount=0,terminalArtifactIncompleteJobId=null;
+let terminalArtifactRetryButton=null;
+const MAX_TERMINAL_ARTIFACT_ATTEMPTS=3;
 function releaseInputPreview(){
   const image=$('input-preview-image');image.onload=null;image.onerror=null;image.hidden=true;image.removeAttribute('src');
   if(previewURL){URL.revokeObjectURL(previewURL);previewURL=null;}
@@ -54,10 +58,36 @@ async function loadInputPreview(){
     $('input-preview-caption').textContent=`${path.split(/[\\/]/).pop()} · ${report.crs}`+(domain==='raster'?` · Band ${report.band} · Màu P2–P98 chỉ để hiển thị${report.sampled?' · Xem trước giảm mẫu':''}${report.no_valid_samples?' · Không có pixel hợp lệ trong ảnh xem trước':''}`:' · Giữ nguyên biên và lỗ');
   }catch(error){if(request!==previewRequest||key!==previewIdentity())return;$('input-preview-status').textContent='Không dựng được xem trước: '+error.message;}
 }
+function demPreviewIdentity(){return [$('dem-raster').value.trim(),$('dem-band').value,$('gmsh-sizing').value,currentStage].join('|');}
+function releaseDemPreview(){const image=$('dem-preview-image');image.onload=null;image.onerror=null;image.hidden=true;image.removeAttribute('src');if(demPreviewURL){URL.revokeObjectURL(demPreviewURL);demPreviewURL=null;}}
+function clearDemPreview(){demPreviewRequest++;demPreviewKey='';releaseDemPreview();$('dem-preview').hidden=true;$('dem-preview-status').textContent='Chọn DEM để xem trước.';$('dem-preview-meta').replaceChildren();$('dem-preview-caption').textContent='Màu P2–P98 chỉ phục vụ hiển thị.';}
+async function loadDemPreview(){
+  const path=$('dem-raster').value.trim(),sizing=$('gmsh-sizing').value;
+  if(!path||$('mode').value!=='gmsh_generated'||currentStage!==2||!['relief','sf1_relief'].includes(sizing)){clearDemPreview();return;}
+  const key=demPreviewIdentity(),request=++demPreviewRequest;demPreviewKey=key;$('dem-preview').hidden=false;releaseDemPreview();$('dem-preview-meta').replaceChildren();$('dem-preview-caption').textContent='';$('dem-preview-status').textContent='Đang dựng hình DEM…';
+  const bandValue=$('dem-band').value.trim(),band=Number(bandValue);
+  if(!/^\d+$/.test(bandValue)||!Number.isSafeInteger(band)||band<1){fieldError('dem-band','dem-band-error','Nhập band DEM là số nguyên dương.');$('dem-preview-status').textContent='Band DEM không hợp lệ.';return;}
+  fieldError('dem-band','dem-band-error','');
+  try{
+    const report=await api('/api/input-preview',{path,kind:'raster',band,analysis_crs:$('crs').value.trim()});
+    if(request!==demPreviewRequest||key!==demPreviewIdentity())return;
+    const image=$('dem-preview-image'),url=URL.createObjectURL(previewBlob(report.image));demPreviewURL=url;
+    image.onload=()=>{if(demPreviewURL!==url||request!==demPreviewRequest)return;image.hidden=false;$('dem-preview-status').textContent='';};
+    image.onerror=()=>{if(demPreviewURL!==url||request!==demPreviewRequest)return;releaseDemPreview();$('dem-preview-status').textContent='Không hiển thị được ảnh xem trước. Hãy thử lại.';};
+    image.src=url;
+    const shape=Array.isArray(report.source_shape)?`${report.source_shape[1]} × ${report.source_shape[0]} px`:'—';
+    const resolution=Array.isArray(report.pixel_size)?report.pixel_size.map(value=>`${value}`).join(' × ')+(report.coordinate_units&&report.coordinate_units!=='unknown'?` ${report.coordinate_units}`:''):'—';
+    const crs=report.crs||'Chưa có CRS';
+    const rows=[['Tệp',path.split(/[\\/]/).pop()],['CRS',report.crs_defined===false?'Chưa khai báo · cần .prj cùng tên':crs],['Band',report.band??band],['Kích thước',shape],['Kích thước pixel',resolution],['NoData',report.nodata===undefined||report.nodata===null?'—':report.nodata]];
+    $('dem-preview-meta').replaceChildren();detailRows($('dem-preview-meta'),rows);
+    $('dem-preview-caption').textContent=[report.sampled?'Ảnh xem trước đã giảm mẫu.':'',report.no_valid_samples?'Không có pixel hợp lệ.':'','Màu P2–P98 chỉ phục vụ hiển thị.'].filter(Boolean).join(' ');
+  }catch(error){if(request!==demPreviewRequest||key!==demPreviewIdentity())return;$('dem-preview').hidden=false;$('dem-preview-status').textContent='Không dựng được preview: '+error.message;$('dem-preview-meta').replaceChildren();}
+}
 function showResultTab(value){
-  if(busy||!['mesh','extract'].includes(value))return;
+  if(!['mesh','extract','log'].includes(value))return;
   resultTab=value;document.body.dataset.result=value;
-  for(const tab of ['mesh','extract'])$('result-'+tab+'-tab').setAttribute('aria-selected',String(tab===value));
+  for(const tab of ['mesh','extract','log']){$('result-'+tab+'-tab').setAttribute('aria-selected',String(tab===value));$('result-'+tab+'-tab').tabIndex=tab===value?0:-1;const panel=$(tab==='mesh'?'mesh-result-panel':tab==='extract'?'extract-result-panel':'result-log-panel');panel.hidden=tab!==value;panel.setAttribute('aria-hidden',String(tab!==value));}
+  if(value==='log')return;
   $('result-map-title').textContent=value==='mesh'?'Lưới đã tạo':'Thuộc tính trên lưới';
   if(savedMap){const view=mapView();draw(savedMap.cells,value==='extract'?savedMap.records:[],{...savedMap.contract,footprint:value==='extract'?savedMap.contract.footprint:null,attributeSummary:value==='extract'?savedMap.contract.attributeSummary:null},false);if(view)$('map').setAttribute('viewBox',view.join(' '));}
 }
@@ -113,6 +143,8 @@ function stage(value,moveFocus=true,internalRestore=false){
   if(busy&&!internalRestore)return;
   if(value===4&&(!jobId||!displayCellCount()))return;
   currentStage=value;
+  if(value===4&&$('job-monitor').hidden){$('job-monitor').hidden=false;$('monitor-phase').textContent='Lưới đã sẵn sàng';$('monitor-elapsed').textContent='—';$('monitor-percent').textContent='Chưa có tác vụ đang chạy';$('monitor-eta').textContent='—';$('cancel-run').disabled=true;}
+  if(value!==2)clearDemPreview();else if(['relief','sf1_relief'].includes($('gmsh-sizing').value)&&$('dem-raster').value.trim())loadDemPreview();
   visitedStages.add(value);document.body.dataset.stage=String(value);
   for(const panel of document.querySelectorAll('[data-panel]'))panel.hidden=Number(panel.dataset.panel)!==value;
   for(const button of document.querySelectorAll('button[data-stage]')){button.setAttribute('aria-current',Number(button.dataset.stage)===value?'step':'false');button.classList.toggle('visited',visitedStages.has(Number(button.dataset.stage)));}
@@ -160,12 +192,14 @@ function renderMonitor(job){
   $('monitor-phase').textContent=job.status==='stopping'?'Đang dừng…':job.status==='pass'?'Hoàn thành':job.status==='cancelled'?'Đã dừng':job.status==='fail'?'Thất bại':phase;
   $('monitor-elapsed').textContent=duration(m.elapsed_seconds);
   const known=Number.isFinite(m.phase_percent);
-  $('monitor-percent').textContent=!active?'—':known?`${m.phase_percent.toFixed(0)}% · ${gmshPercent?'trong log Gmsh':'chỉ bước này'}`:gmshPercent||m.phase==='meshing'?'Gmsh chưa báo phần trăm':'Bước này chưa có phần trăm';
+  $('monitor-percent').textContent=!active?'—':known?`${m.phase_percent.toFixed(0)}%${gmshPercent?' · trong log Gmsh':''}`:gmshPercent||m.phase==='meshing'?'Gmsh chưa báo phần trăm':'Chưa có số liệu';
   $('phase-progress').hidden=!active||!known;if(known)$('phase-progress').value=m.phase_percent;
   $('progress').hidden=!active||known;
   $('cancel-run').disabled=!active||job.status==='stopping'||m.cancel_requested||cancelPending;
   $('cancel-run').textContent=job.status==='cancelled'?'Đã dừng':active&&(job.status==='stopping'||m.cancel_requested)?'Đang dừng…':'Dừng tác vụ';
   $('monitor-eta').textContent=m.eta&&active&&!gmshPercent?`${duration(m.eta.low_seconds)} – ${duration(m.eta.high_seconds)} · ${stageNames[m.eta.scope]||m.eta.scope}`:active?'Chưa đủ dữ liệu để ước tính':'—';
+  $('job-log-identity').textContent=`Tác vụ ${jobId||'—'} · ${extractMode?'Extract thuộc tính':'Tạo lưới'}${m.has_gmsh_log?' · Nhật ký Gmsh':' · Tác vụ này không phát sinh log Gmsh'}`;
+  if(extractMode){$('extract-status').className='info '+(job.status==='fail'?'error':job.status==='pass'?'success':'');$('extract-status').textContent=job.status==='pass'?'Đã xử lý xong. Đang tải và kiểm tra kết quả…':job.status==='cancelled'?'Đã dừng extract. Lưới đã tạo vẫn được giữ nguyên.':job.status==='fail'?'Extract thất bại: '+(job.result?.error||'Mở Nhật ký để xem chi tiết.'):$('monitor-phase').textContent;}
   $('job-log-download').hidden=active||!m.has_gmsh_log;
   $('job-console-panel').hidden=!m.has_gmsh_log&&!m.log_line_count;
 }
@@ -195,9 +229,11 @@ async function api(path,data,timeout=0){
     const value=await response.json();if(!response.ok){const error=new Error(value.error||`HTTP ${response.status}`);error.status=response.status;throw error;}return value;
   }finally{if(timer!==null)clearTimeout(timer);}
 }
+function readableExtractError(message){const text=String(message||'');if(/band.*out of range/i.test(text))return 'Band đã chọn không có trong raster. Chọn band từ 1 đến số band của tệp.';return text;}
 function toast(message){clearTimeout(toastTimer);$('toast').textContent=message;$('toast').hidden=false;toastTimer=setTimeout(()=>{$('toast').hidden=true;},7000);}
 function resetResult(){
   jobLogCursor=0;monitorJobId=null;cancelPending=false;$('job-log').textContent='';$('log-notice').textContent='';$('job-monitor').hidden=true;$('job-log-download').hidden=true;$('cancel-run').disabled=true;
+  terminalArtifactFailureJobId=null;terminalArtifactFailureCount=0;terminalArtifactIncompleteJobId=null;terminalArtifactRetryButton?.remove?.();terminalArtifactRetryButton=null;
   savedMap=null;resultTab='mesh';document.body.dataset.result='mesh';
   jobId=null;resultPath='';selectedCellId=null;fitBox=null;mapUnits='';mapCRS='';
   $('exports').hidden=true;$('msh').hidden=true;$('mesh-json').hidden=true;
@@ -248,6 +284,7 @@ function mode(){
   $('h-min').readOnly=sf1;$('h-max').readOnly=sf1;if(sf1){$('h-min').value='250';$('h-max').value='1000';}
   $('h-min-help').textContent=sf1?'Hồ sơ SF-1 cố định 250 m trước scale và gradation.':'Nhập số dương, không lớn hơn h_max. Nhỏ hơn cho phép chia mịn hơn ở nơi relief cao.';
   $('h-max-label').textContent=relief?'h_max · kích thước mục tiêu lớn nhất (m)':'h · kích thước mục tiêu (m)';
+  if(relief&&currentStage===2&&$('dem-raster').value.trim()){if(demPreviewKey!==demPreviewIdentity())loadDemPreview();}else clearDemPreview();
   $('h-max-help').textContent=sf1?'Hồ sơ SF-1 cố định 1000 m. h_scaled = clip(scale × h_raw, 250, 1000), sau đó giới hạn gradation.':relief?'Nhập số dương ≥ h_min. Vùng ít relief, thiếu DEM hoặc relief không đổi dùng h_max.':'Nhập kích thước mục tiêu theo mét, ví dụ 250. Kích thước cạnh thực tế được thống kê sau khi tạo lưới.';
   const subdivisionsRelevant=extractMode||(domain==='raster'&&!sameCRS());
   $('subdivisions').hidden=!subdivisionsRelevant;$('subdivisions-label').hidden=!subdivisionsRelevant;
@@ -399,7 +436,7 @@ function config(){
   requireDomainSelection();
   if(extractMode){
     if(!meshSnapshot)throw new Error('Chưa có lưới');
-    return {schema_version:'gis-workbench-run-config-v2',operation:'extract',extraction_engine:'indexed_windowed_v1',run_name:'mesh-cherry-extract',analysis_crs:meshSnapshot.crs,raster_path:$('extract-raster').value.trim(),band:number('extract-band'),semantics:$('extract-semantics').value,value_units:$('extract-units').value.trim(),output_root:$('output').value,edge_subdivisions:number('subdivisions'),cell_source:{kind:'frozen_cells',path:meshSnapshot.path,geometry_digest:meshSnapshot.digest,max_cells:number('max-cells')}};
+    return {schema_version:'gis-workbench-run-config-v2',operation:'extract',extraction_engine:'indexed_windowed_v1',run_name:'mesh-cherry-extract',analysis_crs:meshSnapshot.crs,raster_path:$('extract-raster').value.trim(),band:number('extract-band'),semantics:$('extract-semantics').value,value_units:$('extract-units').value.trim(),output_root:$('output').value,edge_subdivisions:number('subdivisions'),cell_source:{kind:'frozen_cells',path:meshSnapshot.path,geometry_digest:meshSnapshot.digest,max_cells:acceptedExtractionCellLimit()}};
   }
   const kind=$('mode').value;const cell_source={kind,max_cells:number('max-cells')};
   if(kind==='structured_grid')Object.assign(cell_source,{extent:['west','south','east','north'].map(number),cell_width_m:number('width'),cell_height_m:number('height'),boundary_policy:$('policy').value});
@@ -424,6 +461,10 @@ function config(){
   if(meshOnly&&kind==='structured_grid'&&$('gmsh-domain').value==='raster'&&source?.display_footprint){const f=source.display_footprint;if(f.approximate||f.xy.length!==4||f.xy.some(p=>![f.bounds[0],f.bounds[2]].includes(p[0])||![f.bounds[1],f.bounds[3]].includes(p[1])))throw new Error('ROI raster xoay hoặc đổi CRS: chọn Gmsh để giữ đúng biên ROI.');}
   const resolution_reference=$('gmsh-domain').value!=='raster'&&$('planned-raster').value.trim()?{path:$('planned-raster').value.trim(),band:number('planned-band')}:null;
   return {...(resolution_reference?{resolution_reference}:{}),schema_version:'gis-workbench-run-config-v2',operation:'mesh_only',extraction_engine:'indexed_windowed_v1',run_name:'mesh-cherry-ui',analysis_crs:$('crs').value.trim(),output_root:$('output').value,cell_source,edge_subdivisions:number('subdivisions')};
+}
+function acceptedExtractionCellLimit(){
+  const count=Number(meshSnapshot?.display?.cell_count??meshSnapshot?.cells?.length??0);
+  return Number.isSafeInteger(count)&&count>0?Math.min(count,100000):100000;
 }
 async function inspectSource(){
   const request=++sourceRequest,crs=$('crs').value.trim();
@@ -596,24 +637,29 @@ function moveMapFocus(event){
   items.forEach((item,i)=>item.setAttribute('tabindex',i===next?0:-1));items[next].focus();
 }
 async function validate(){
-  const requestRevision=revision;let cfg;$('validate').disabled=true;$('run').disabled=true;preflightId=null;$('validation').textContent='Đang kiểm tra metadata, hình học và workload…';
+  const requestRevision=revision;let cfg;$('validate').disabled=true;$('run').disabled=true;preflightId=null;$('validation').textContent='Đang kiểm tra metadata, hình học và workload…';if(extractMode)$('extract-detail-content').replaceChildren();
   try{requireDomainSelection();if(!extractMode&&!checkParameterFields())throw new Error('Sửa các ô được đánh dấu trước khi kiểm tra.');cfg=config();const data=await api('/api/preflight',cfg);if(requestRevision!==revision){toast('Cấu hình thay đổi trong khi kiểm tra. Hãy kiểm tra lại.');return;}
     const report=data.report;$('validation').className='info '+(report.status==='pass'?'pass':'error');
     const estimate=report.workload_estimate;
     $('validation').textContent=report.status==='pass'?`✓ Preflight đạt\nEngine: indexed_windowed_v1\nCell: ${report.cell_count===null?'tạo khi meshing':report.cell_count}\nCRS cell / analysis: ${$('crs').value} · metre\nRaster: ${source?.crs||'WKT ghi trong hồ sơ'}\nSource: ${report.pixel_count.toLocaleString('vi-VN')} pixel\nDự kiến đọc: ${estimate?estimate.estimated_pixels_read.toLocaleString('vi-VN')+' pixel / '+estimate.estimated_windows_read+' window':'kiểm tra sau khi sinh mesh'}\nCeilings: source 10M · đọc 2M · pairs 5M\nGiới hạn cell: ${number('max-cells')} · window ≤ 65.536`:report.errors.join('\n');
-    if(report.status==='pass'){$('validation').replaceChildren();const heading=document.createElement('strong');heading.textContent='✓ Cấu hình hợp lệ trong giới hạn v1.';$('validation').append(heading);detailRows($('validation'),[['Nguồn',`${report.pixel_count.toLocaleString('vi-VN')} pixel`],['CRS tính toán',$('crs').value],['Raster',cfg.raster_path||'—'],['Band',cfg.band??'—'],['Loại thuộc tính',cfg.semantics||'—'],['Đơn vị',cfg.value_units||'—'],['Mã hình học',report.geometry_digest||'—'],['Số ô',report.cell_count??'Tạo khi meshing'],['Dự kiến đọc',estimate?`${estimate.estimated_pixels_read.toLocaleString('vi-VN')} pixel / ${estimate.estimated_windows_read} cửa sổ`:'Kiểm tra sau khi sinh mesh'],['Giới hạn',`${number('max-cells')} ô; nguồn 10M / đọc 2M pixel; 5M cặp; 65.536 pixel/cửa sổ`]]);}
+    if(report.status==='pass'){
+      const rows=[['Nguồn',`${report.pixel_count.toLocaleString('vi-VN')} pixel`],['CRS tính toán',$('crs').value],['Raster',cfg.raster_path||'—'],['Band',cfg.band??'—'],['Loại thuộc tính',cfg.semantics||'—'],['Đơn vị',cfg.value_units||'—'],['Mã hình học',report.geometry_digest||'—'],['Số ô',report.cell_count??'Tạo khi meshing'],['Dự kiến đọc',estimate?`${estimate.estimated_pixels_read.toLocaleString('vi-VN')} pixel / ${estimate.estimated_windows_read} cửa sổ`:'Kiểm tra sau khi sinh mesh'],['Giới hạn',`${number('max-cells')} ô; nguồn 10M / đọc 2M pixel; 5M cặp; 65.536 pixel/cửa sổ`]];
+      $('validation').replaceChildren();const heading=document.createElement('strong');heading.textContent='✓ Kiểm tra cấu hình đạt';$('validation').append(heading);detailRows($('validation'),rows);
+      if(extractMode){$('extract-detail-content').replaceChildren();detailRows($('extract-detail-content'),rows);}
+    }
     if(report.status==='pass'&&extractMode&&report.raster_resolution){$('extract-resolution').replaceChildren();detailRows($('extract-resolution'),resolutionRows(report.raster_resolution));const note=document.createElement('p');note.textContent='Đây là độ phân giải raster extract thực tế. Giữ nguyên ô và node của lưới đã lưu, không chia lại.';$('extract-resolution').append(note);}
     let footprint=null;
     if(report.status==='pass'&&config().raster_path){const cfg=config();const metadata=await api('/api/source',{path:cfg.raster_path,band:cfg.band,analysis_crs:cfg.analysis_crs});footprint=metadata.display_footprint;if(requestRevision!==revision)return;}
     if(report.status==='pass'&&report.operation==='mesh_only'){
       $('validation').replaceChildren();detailRows($('validation'),[['Trạng thái','Cấu hình tạo lưới hợp lệ'],...requestRows(report.meshing_request),['Số ô',report.cell_count??'Tính khi Gmsh tạo lưới']]);
     }
-    preflightId=data.preflight_id;$('run').disabled=!preflightId||busy;if(!extractMode)draw(data.cells,[],{crs:$('crs').value,units:$('units').value,footprint,display:data.display});refreshCoach();
+    preflightId=report.status==='pass'?data.preflight_id:null;$('run').disabled=!preflightId||busy;if(!extractMode)draw(data.cells,[],{crs:$('crs').value,units:$('units').value,footprint,display:data.display});refreshCoach();
+    return preflightId?{preflightId,revision:requestRevision}:null;
   }catch(error){if(requestRevision!==revision)return;$('validation').className='info error';$('validation').textContent=error.message;
     if(error.sourceField)showSourceFieldError(error);
-  }finally{$('validate').disabled=busy;}
+  }finally{$('validate').disabled=busy;if(extractMode){const ok=!!preflightId;$('extract-status').className='info '+(ok?'success':'error');$('extract-status').textContent=ok?'✓ Kiểm tra đạt. Đang chuẩn bị extract.':readableExtractError($('validation').textContent)||'Chưa kiểm tra được raster. Hãy thử lại.';if(!ok)$('extract-detail-content').textContent=$('validation').textContent;}}
 }
-function setBusy(value){busy=value;for(const el of $('extract-options').querySelectorAll('input,select,button'))el.disabled=value;for(const input of $('form').querySelectorAll('input,select,button'))input.disabled=value;for(const control of document.querySelectorAll('button[data-stage],#gmsh-setup-open,#tutorial-help'))control.disabled=value;if(!value){mode();helpers();document.querySelector('button[data-stage="4"]').disabled=!jobId||!displayCellCount();$('run').disabled=!preflightId;$('tutorial-finish').disabled=!tutorialActive||tutorialClicks.size!==2;}$('progress').hidden=!value;$('cancel-run').disabled=!value||!jobId||cancelPending;syncDocumentControls();refreshCoach();}
+function setBusy(value){busy=value;document.body.dataset.busy=String(value);for(const el of $('extract-options').querySelectorAll('input,select,button'))el.disabled=value;for(const input of $('form').querySelectorAll('input,select,button'))input.disabled=value;for(const control of document.querySelectorAll('button[data-stage],#gmsh-setup-open,#tutorial-help'))control.disabled=value;for(const tab of ['mesh','extract','log'])$('result-'+tab+'-tab').disabled=false;if(!value){mode();helpers();document.querySelector('button[data-stage="4"]').disabled=!jobId||!displayCellCount();$('run').disabled=!preflightId;$('tutorial-finish').disabled=!tutorialActive||tutorialClicks.size!==2;}$('progress').hidden=!value;$('cancel-run').disabled=!value||!jobId||cancelPending;syncDocumentControls();refreshCoach();}
 async function startRun(){
   if(!preflightId||busy)return;const id=preflightId;preflightId=null;resetResult();
   if(extractMode&&meshSnapshot){draw(meshSnapshot.cells,[],{crs:meshSnapshot.crs,units:'',display:meshSnapshot.display});showResultTab('extract');}
@@ -681,9 +727,21 @@ async function recoverStart(){
     setTimeout(()=>{if(runRequest?.requestId===pending.requestId)recoverStart();},2000);
   }
 }
+function offerTerminalArtifactRetry(expectedJobId){
+  terminalArtifactRetryButton?.remove?.();
+  const retry=document.createElement('button');retry.type='button';retry.textContent='Thử tải lại kết quả';
+  retry.onclick=async()=>{
+    if(busy||jobId!==expectedJobId)return;
+    terminalArtifactFailureJobId=expectedJobId;terminalArtifactFailureCount=0;
+    retry.disabled=true;setBusy(true);jobHeadline.textContent='Đang thử tải lại kết quả…';$('job-status').textContent='Đang thử tải lại kết quả…';
+    if(extractMode)$('extract-status').textContent='Đang thử tải lại kết quả…';
+    await pollJob(expectedJobId);
+  };
+  terminalArtifactRetryButton=retry;$('monitor-headline').append(retry);
+}
 async function pollJob(expectedJobId=jobId){
   let terminal=false;
-  try{const job=await api('/api/job?id='+encodeURIComponent(expectedJobId));if(expectedJobId!==jobId)return;renderMonitor(job);await syncJobLog(expectedJobId);if(expectedJobId!==jobId)return;$('job-status').textContent=stageNames[job.stage]||job.stage;jobHeadline.textContent=job.status==='stopping'?'Đang dừng… chờ bước hiện tại kết thúc.':job.status==='running'?`🍒 ${stageNames[job.monitor?.phase]||stageNames[job.stage]||job.stage}…`:job.status==='pass'?'✓ Đã tạo kết quả. Bạn có thể xuất CSV / JSON.':'Không hoàn tất. Mở chi tiết kỹ thuật để xem lỗi.';
+  try{const job=await api('/api/job?id='+encodeURIComponent(expectedJobId));if(expectedJobId!==jobId)return;renderMonitor(job);await syncJobLog(expectedJobId);if(expectedJobId!==jobId)return;$('job-status').textContent=stageNames[job.stage]||job.stage;jobHeadline.textContent=job.status==='stopping'?'Đang dừng… chờ bước hiện tại kết thúc.':job.status==='running'?`🍒 ${stageNames[job.monitor?.phase]||stageNames[job.stage]||job.stage}…`:job.status==='pass'?'Đã xử lý xong. Đang tải và kiểm tra kết quả…':'Không hoàn tất. Mở chi tiết kỹ thuật để xem lỗi.';
     if(['running','stopping'].includes(job.status)){setTimeout(()=>{if(jobId===expectedJobId)pollJob(expectedJobId);},650);return;}
     terminal=true;resultPath=job.result.output||'';const manifest=resultPath?await api(`/api/artifact?id=${jobId}&name=manifest`):null;
     if(job.status==='cancelled'){if(extractMode&&meshSnapshot){restoreAcceptedMeshPresentation();extractMode=false;}else{$('exports').hidden=true;}$('job-status').className='info';$('job-status').textContent='Đã dừng theo yêu cầu. Kết quả dang dở không được dùng để xuất.';jobHeadline.textContent=meshSnapshot?'Đã dừng extract. Lưới đã tạo trước đó vẫn được giữ nguyên.':'Đã dừng tác vụ. Log được giữ để xem lại.';clearRunRequest();setBusy(false);if(meshSnapshot)stage(4,false);return;}
@@ -706,11 +764,32 @@ async function pollJob(expectedJobId=jobId){
     const cellCount=cells.display?.cell_count??cells.cells.length,fullCount=attributes.summary?.full_count??attributes.cells.filter(r=>coverageState(r).full).length;
     $('job-status').className='info pass';$('job-status').textContent=`✓ Hoàn thành · ${cellCount} cell\nValid coverage (mean): ${(qa.coverage.valid_coverage.mean*100).toFixed(2)}%\nFootprint coverage: ${(qa.coverage.footprint_coverage.mean*100).toFixed(2)}%\nThời gian run: ${manifest.runtime_seconds.toFixed(2)} s\nĐọc: ${evidence.pixels_read.toLocaleString('vi-VN')} pixel / ${evidence.windows_read} window\nCandidate pairs: ${evidence.candidate_pairs.toLocaleString('vi-VN')}\nPeak RSS lifetime: ${evidence.memory_metric.value===null?'unavailable':(evidence.memory_metric.value/1048576).toFixed(1)+' MiB'}\nBộ raster và file đi kèm: không đổi${attributes.qa.residual===undefined?'':'\nExtensive residual: '+attributes.qa.residual}\nOutput: ${resultPath}`;
     jobHeadline.textContent=`✓ ${cellCount} ô đã trích thuộc tính. ${fullCount} ô phủ đủ dữ liệu.`;
+    terminalArtifactFailureJobId=null;terminalArtifactFailureCount=0;terminalArtifactIncompleteJobId=null;terminalArtifactRetryButton?.remove?.();terminalArtifactRetryButton=null;
+    $('extract-status').className='info success';$('extract-status').textContent=jobHeadline.textContent+' Sẵn sàng xuất CSV / JSON.';
     $('exports').hidden=false;$('csv').hidden=false;$('json').hidden=false;clearRunRequest();setBusy(false);stage(4);showResultTab('extract');
     $('msh').hidden=!(meshSnapshot?.hasMsh||manifest.gmsh_generated);$('mesh-json').hidden=!(meshSnapshot||manifest.gmsh_generated);
   }catch(error){if(expectedJobId!==jobId)return;$('job-status').className='info error';$('job-status').textContent=`Không đọc được trạng thái/kết quả: ${error.message}.`;
-    if(terminal){jobHeadline.textContent='Lượt chạy đã kết thúc nhưng chưa tải đủ kết quả. Đang thử tải lại…';setBusy(false);}
-    else{jobHeadline.textContent='Mất kết nối UI — đang thử lại. Lượt chạy có thể vẫn tiếp tục; giữ nguyên cấu hình.';}
+    if(terminal){
+      if(terminalArtifactFailureJobId!==expectedJobId){terminalArtifactFailureJobId=expectedJobId;terminalArtifactFailureCount=0;}
+      terminalArtifactFailureCount++;
+      const permanent=[400,403,404,410].includes(error.status),retryAutomatically=!permanent&&terminalArtifactFailureCount<MAX_TERMINAL_ARTIFACT_ATTEMPTS;
+      if(retryAutomatically){
+        jobHeadline.textContent='Lượt chạy đã kết thúc nhưng chưa tải đủ kết quả. Đang thử tải lại…';
+        if(extractMode){$('extract-status').className='info error';$('extract-status').textContent=jobHeadline.textContent;}
+        setTimeout(()=>{if(jobId===expectedJobId)pollJob(expectedJobId);},2000);
+        return;
+      }
+      if(extractMode&&meshSnapshot){restoreAcceptedMeshPresentation();jobId=expectedJobId;}
+      else $('exports').hidden=true;
+      terminalArtifactIncompleteJobId=expectedJobId;
+      clearRunRequest();setBusy(false);
+      const reason=permanent?'Artifact không còn truy cập được.':'Đã hết số lần tự động thử tải.';
+      jobHeadline.textContent='Lượt chạy đã kết thúc nhưng chưa tải đủ kết quả. '+reason+' Bạn có thể thử lại.';
+      $('job-status').className='info error';$('job-status').textContent=`Không đọc được trạng thái/kết quả: ${error.message}.\n${reason}`;
+      if(extractMode){$('extract-status').className='info error';$('extract-status').textContent=jobHeadline.textContent;}
+      offerTerminalArtifactRetry(expectedJobId);if(meshSnapshot)stage(4,false);return;
+    }
+    jobHeadline.textContent='Mất kết nối UI — đang thử lại. Lượt chạy có thể vẫn tiếp tục; giữ nguyên cấu hình.';
     setTimeout(()=>{if(jobId===expectedJobId)pollJob(expectedJobId);},2000);
   }
 }
@@ -741,11 +820,13 @@ function invalidateExtraction(){
   if(busy)return;
   revision++;preflightId=null;extractMode=false;
   restoreAcceptedMeshPresentation();
+  $('extract-status').className='info muted';$('extract-status').textContent='Nguồn extract đã thay đổi. Bấm Kiểm tra & extract để chạy trên lưới hiện tại.';
 }
 
 function acceptPickerPath(target,path){$(target).value=path;clearSourceFieldError(target);if(target==='comparison-raster'){clearComparison();return;}if(target==='extract-raster')invalidateExtraction();else invalidate();}
 async function acceptSelectedSource(target,path){
   acceptPickerPath(target,path);
+  if(target==='dem-raster')await loadDemPreview();
   if(['raster','boundary-path','mesh'].includes(target)){
     exitTutorial();
     if(target==='boundary-path'){$('mode').value='gmsh_generated';$('gmsh-domain').value='shapefile';}
@@ -761,7 +842,7 @@ async function acceptSelectedSource(target,path){
 function syncDocumentControls(){
   if($('project-open'))$('project-open').disabled=busy;
   if($('project-save'))$('project-save').disabled=busy||!meshSnapshot;
-  if($('export-run'))$('export-run').disabled=busy||!jobId||!displayCellCount();
+  if($('export-run'))$('export-run').disabled=busy||!jobId||!displayCellCount()||terminalArtifactIncompleteJobId===jobId;
   const raster=['geotiff','asc'].includes($('export-format')?.value);
   if($('export-nodata-control'))$('export-nodata-control').hidden=!raster;
   if($('export-resolution')){$('export-resolution').disabled=busy||!raster;markRequired('export-resolution',raster);}
@@ -776,7 +857,7 @@ async function downloadResponse(response,fallback){
   link.href=url;link.download=name;link.click();setTimeout(()=>URL.revokeObjectURL(url),5000);
 }
 function projectView(){return {show_edges:$('show-edges').checked,show_nodes:$('show-nodes').checked,
-  result_tab:resultTab,selected_cell_id:selectedCellId,view_box:$('map').getAttribute('viewBox')};}
+  result_tab:resultTab==='log'?'mesh':resultTab,selected_cell_id:selectedCellId,view_box:$('map').getAttribute('viewBox')};}
 async function saveProject(){
   if(busy||!meshSnapshot)return;
   const request={mesh_job_id:meshSnapshot.jobId,job_id:jobId,view_settings:projectView()};setBusy(true);
@@ -940,14 +1021,22 @@ function downloadComparison(){if(!comparisonReport)return;const blob=new Blob([J
 $('project-open').onclick=()=>{if(!busy)$('project-file').click();};
 $('project-file').onchange=()=>openProject($('project-file').files?.[0]);
 $('project-save').onclick=saveProject;$('export-run').onclick=exportResult;$('export-format').onchange=syncDocumentControls;
+$('dem-raster').addEventListener('input',()=>{if(demPreviewKey&&demPreviewKey!==demPreviewIdentity())clearDemPreview();});
+$('dem-raster').addEventListener('change',loadDemPreview);
+$('dem-band').addEventListener('input',()=>{if(demPreviewKey&&demPreviewKey!==demPreviewIdentity())clearDemPreview();});
+$('dem-band').addEventListener('change',loadDemPreview);
+$('gmsh-sizing').addEventListener('change',loadDemPreview);
 $('form').addEventListener('submit',e=>e.preventDefault());$('form').addEventListener('input',e=>{invalidate();if(previewKey&&previewKey!==previewIdentity())clearInputPreview();if(['raster','band','crs'].includes(e.target.id)){sourceRequest++;source=null;helpers();}if(['planned-raster','planned-band','crs'].includes(e.target.id)){plannedRequest++;plannedSource=null;}parameterPreview();renderResolution();});$('form').addEventListener('change',()=>{invalidate();mode();helpers();});
 $('tools-open').onclick=openTools;$('tools-close').onclick=()=>{if(!comparisonJobId&&!busy)$('tools-dialog').close();};$('tools-dialog').addEventListener('cancel',event=>{if(busy)event.preventDefault();});$('tool-compare').onclick=()=>{$('comparison-panel').hidden=false;$('research-panel').hidden=true;$('tool-compare').setAttribute('aria-pressed','true');$('tool-research').setAttribute('aria-pressed','false');$('comparison-size').focus();};$('tool-research').onclick=()=>{if(!busy)showResearch();};
 $('tool-variation').onclick=()=>{if(busy)return;$('tools-dialog').close();$('mode').value='gmsh_generated';$('gmsh-sizing').value='sf1_relief';invalidate();mode();stage(2);$('dem-raster').focus();};
 $('comparison-run').onclick=startComparison;$('comparison-stop').onclick=stopComparison;$('comparison-download').onclick=downloadComparison;
 for(const id of ['comparison-raster','comparison-band','comparison-size','comparison-semantics','comparison-units'])$(id).addEventListener('input',clearComparison);
 $('refresh-input-preview').onclick=loadInputPreview;
+$('refresh-dem-preview').onclick=loadDemPreview;
 $('result-mesh-tab').onclick=()=>showResultTab('mesh');
 $('result-extract-tab').onclick=()=>showResultTab('extract');
+$('result-log-tab').onclick=()=>showResultTab('log');
+for(const [index,tab] of ['mesh','extract','log'].entries())$('result-'+tab+'-tab').addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const next=event.key==='Home'?0:event.key==='End'?2:(index+(event.key==='ArrowRight'?1:2))%3;showResultTab(['mesh','extract','log'][next]);$('result-'+['mesh','extract','log'][next]+'-tab').focus();});
 for(const button of document.querySelectorAll('[data-pick]'))button.onclick=async()=>{
   if(busy||!bootstrap)return;
   pickerTarget=button.dataset.pick;
@@ -1051,7 +1140,23 @@ function showProjectHistory(qa){
   if(q.sizing_summary)rows.push(...requestRows(q.sizing_summary));
   detailRows(content,rows);
 }
-$('extract-run').onclick=async()=>{if(busy||!meshSnapshot)return;extractMode=true;await validate();if(preflightId)await startRun();};
+async function runExtraction(){
+  if(busy||extractChecking||!meshSnapshot)return;
+  for(const id of ['extract-raster','extract-band','extract-units'])$(id).setAttribute('aria-invalid','false');
+  const bandText=$('extract-band').value.trim(),band=Number(bandText);
+  const missing=!$('extract-raster').value.trim()?['extract-raster','Chọn raster GeoTIFF hoặc ASC để extract.']:!/^\d+$/.test(bandText)||!Number.isSafeInteger(band)||band<1?['extract-band','Nhập band raster là số nguyên dương.']:!$('extract-units').value.trim()?['extract-units','Nhập đơn vị thuộc tính, ví dụ m, mm hoặc mã lớp.']:null;
+  if(missing){showResultTab('extract');$(missing[0]).setAttribute('aria-invalid','true');$(missing[0]).focus();$('extract-status').className='info error';$('extract-status').textContent=missing[1];return;}
+  extractChecking=true;extractMode=true;showResultTab('extract');setBusy(true);
+  const started=Date.now();$('extract-status').className='info';$('extract-status').textContent='Đang kiểm tra raster và mức phủ lưới…';
+  $('job-monitor').hidden=false;$('monitor-phase').textContent='Kiểm tra extract';$('monitor-percent').textContent='Kiểm tra cấu hình';$('monitor-eta').textContent='Chưa đủ dữ liệu để ước tính';$('cancel-run').disabled=true;$('phase-progress').hidden=true;
+  const tick=()=>{$('monitor-elapsed').textContent=duration((Date.now()-started)/1000);};tick();
+  const timer=typeof setInterval==='function'?setInterval(tick,1000):null;
+  let checked;
+  try{checked=await validate();}finally{if(timer!==null)clearInterval(timer);tick();extractChecking=false;setBusy(false);}
+  if(checked&&checked.revision===revision&&checked.preflightId===preflightId){$('extract-status').textContent='Đang extract thuộc tính…';await startRun();}
+  else{$('monitor-phase').textContent='Kiểm tra extract chưa đạt';$('monitor-percent').textContent='Chưa khởi chạy';$('monitor-eta').textContent='—';$('progress').hidden=true;}
+}
+$('extract-run').onclick=runExtraction;
 for(const id of ['extract-raster','extract-band','extract-semantics','extract-units'])$(id).addEventListener('input',invalidateExtraction);
 
 $('try-sample').onclick=()=>useSample().catch(error=>toast(error.message));

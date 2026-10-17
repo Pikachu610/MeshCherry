@@ -180,12 +180,17 @@ body:not([data-stage="4"]) #extract-options{display:none}
 .two{grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:18px}
 #gmsh-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
 #gmsh-options>h3,#gmsh-options>.parameter-fields,#gmsh-options>#parameter-preview,#gmsh-options>.field-help{grid-column:1 / -1}
+#gmsh-options>.dem-preview{grid-column:2;align-self:start}
+.dem-preview h4{margin:0 0 8px;color:var(--cherry)}
+#dem-preview-image{display:block;width:100%;max-height:340px;object-fit:contain;background:#fffdfb;border:1px solid var(--line);border-radius:10px}
+#dem-preview[hidden],#dem-preview-image[hidden]{display:none}
+#dem-preview-caption{overflow-wrap:anywhere;margin-bottom:10px}
 .configuration-group{min-width:0;background:#fff;padding:16px;border:1px solid var(--line);border-radius:12px}
 #extract-options{max-width:none}#extract-options>.two{grid-template-columns:repeat(2,minmax(0,1fr))}
 body[data-stage="4"] .wizard-panel:has(#mesh-quality){display:block;background:#fff;padding:20px;border:1px solid var(--line)}
 .map-guide{padding-inline:24px}
 @media(max-width:1000px){body[data-stage="1"] .workspace{grid-template-columns:1fr}body[data-stage="4"] #result-view{grid-template-columns:1fr}#result-view .map-card{grid-row:auto}#result-view>details{grid-column:auto}#result-view .results-row{display:grid;grid-template-columns:1fr 1fr}}
-@media(max-width:640px){.mode-choices,#gmsh-options,#result-view .results-row{grid-template-columns:1fr}.result-tabs{flex-wrap:wrap}.detail-rows{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}}
+@media(max-width:640px){.mode-choices,#gmsh-options,#result-view .results-row{grid-template-columns:1fr}#gmsh-options>.dem-preview{grid-column:1}.result-tabs{flex-wrap:wrap}.detail-rows{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}}
 /* Cherry research palette: readable labels, distinct actions and result states. */
 :root{--cherry:#B51F4B;--pink:#FFF0F5;--ink:#352437;--muted:#685366;--line:#EEDAE3;--paper:#FFF8FA}
 h1,h2,h3,.brand{color:#782640}label,.section-label,summary{color:#503347}
@@ -230,3 +235,54 @@ label[for][data-required="true"]::after{content:" *";color:#b51f4b;font-weight:8
 .export-options .two{grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin:10px 0}
 .export-options button{margin-top:8px}
 @media(max-width:640px){.help-cards,.limit-grid{grid-template-columns:1fr}}
+/* Task 35: keep the run controls compact and separate result views. */
+body[data-stage="4"] .job-monitor{position:sticky;top:8px;z-index:5;padding:12px 16px;margin:8px 0;background:#fffdfd;box-shadow:0 5px 18px #732D4510}
+body[data-stage="4"] .job-monitor .monitor-header .eyebrow{display:none}
+body[data-stage="4"] .job-monitor .monitor-header h2{font-size:16px;margin:0}
+body[data-stage="4"] .job-monitor .monitor-metrics{margin:8px 0;gap:10px}
+body[data-stage="4"] #result-view{display:grid}
+body[data-stage="4"][data-result="log"] #result-view{display:none}
+body[data-stage="4"] .result-pane{display:none;min-width:0}
+body:not([data-stage="4"]) .result-pane{display:none}
+body[data-stage="4"][data-result="mesh"] #mesh-result-panel,
+body[data-stage="4"][data-result="extract"] #extract-result-panel,
+body[data-stage="4"][data-result="log"] #result-log-panel{display:block}
+body[data-stage="4"][data-result="mesh"] #extract-options,
+body[data-stage="4"][data-result="extract"] #mesh-quality,
+body[data-stage="4"][data-result="extract"] #project-history{display:none}
+body[data-stage="4"] #job-console-panel{margin-top:0}
+body[data-stage="4"] #job-console-panel[hidden]{display:none}
+body[data-stage="4"] #monitor-details:empty{display:none}
+body[data-stage="4"] #extract-detail{margin-top:12px}
+#extract-detail-content{white-space:pre-line;line-height:1.6}
+#extract-detail-content .detail-rows{grid-template-columns:minmax(0,1fr);gap:10px;white-space:normal}
+#extract-detail-content .detail-item dt{display:block;margin-bottom:5px;line-height:1.5}
+#extract-detail-content .detail-item dd{display:block;line-height:1.6;white-space:normal;overflow-wrap:anywhere}
+@media(max-width:640px){body[data-stage="4"] .job-monitor{top:0;padding:10px}.result-tabs button{min-width:30%}}
+/* Stage 4 workspace: configuration beside the result map on wide screens. */
+body[data-stage="4"] .wizard-panel[data-panel="4"]{scroll-margin-top:180px}
+body[data-stage="4"] #mesh-quality{max-height:40vh;overflow:auto;overscroll-behavior:contain}
+body[data-stage="4"] .job-monitor{position:static;top:auto}
+body[data-stage="4"][data-busy="true"] .job-monitor{position:sticky;top:8px}
+body[data-stage="4"][data-result="log"] .workspace{grid-template-columns:minmax(0,1fr)}
+body[data-stage="4"][data-result="log"] .workspace>.viewer{display:none}
+body[data-stage="4"][data-result="log"] .workspace>aside{min-width:0}
+body[data-stage="4"][data-result="log"] .wizard-panel[data-panel="4"]{width:100%;max-width:none}
+body[data-stage="4"][data-result="log"] #result-log-panel{width:100%;min-width:0}
+body[data-stage="4"][data-result="log"] #job-log{max-width:100%}
+@media(min-width:1100px){
+  body[data-stage="4"] .workspace{grid-template-columns:minmax(300px,360px) minmax(0,1fr);align-items:start;gap:22px}
+  body[data-stage="4"] .workspace>aside,body[data-stage="4"] .workspace>.viewer{min-width:0}
+  body[data-stage="4"] .viewer{display:block}
+  body[data-stage="4"] #result-view{grid-template-columns:minmax(0,1fr);gap:16px}
+  body[data-stage="4"] #result-view .map-card{grid-row:auto}
+  body[data-stage="4"] #result-view .results-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+  body[data-stage="4"] #result-view>details{grid-column:auto}
+}
+@media(max-width:1099px){
+  body[data-stage="4"] .workspace{grid-template-columns:minmax(0,1fr)}
+  body[data-stage="4"] #result-view{grid-template-columns:minmax(0,1fr)}
+  body[data-stage="4"] #result-view .map-card{grid-row:auto}
+  body[data-stage="4"] #result-view .results-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+}
+@media(max-width:640px){body[data-stage="4"] #result-view .results-row{grid-template-columns:minmax(0,1fr)}}

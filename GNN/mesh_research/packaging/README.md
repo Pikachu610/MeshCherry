@@ -1,6 +1,21 @@
-# MeshCherry 3.0 RC8 — Windows build and acceptance
+# MeshCherry 3.0 RC11 — Windows build and acceptance
 
-Application identity: `3.0.0rc8`; candidate tag: `v3.0.0-rc.8` (not yet published).
+Application identity: `3.0.0rc11`; candidate tag: `v3.0.0-rc.11`.
+RC11 addresses final extraction-review findings: accepted imported meshes use their
+own bounded extraction cap; artifact recovery terminates on permanent errors and
+after a bounded number of transient failures; controls recover without publishing
+incomplete attributes. Log uses the full workspace; the compact monitor remains
+sticky during stopping/recovery. Preflight metadata retain labeled cards and phase
+percentages are explicitly labeled as progress of the current stage.
+Extraction now has explicit preflight-to-run handoff, inline errors and completion
+status, retry-safe artifact hydration, and independent Mesh / Extract / Log views.
+Inputs stay locked during owned work and hydration; read-only result tabs remain
+navigable. Raster band errors have a user-facing Vietnamese summary. Existing
+continuous, extensive and categorical extraction methods and geometry are unchanged.
+Focused extraction-flow tests fail against immutable RC9 and pass on RC10.
+Browser acceptance covers failed band preflight and corrected real extraction.
+Step 2 adds a separate selected-DEM preview for local relief/SF-1, including
+GeoTIFF and ASC, native CRS/pixel metadata and missing-CRS diagnostics.
 The candidate adds native-picker correction, explicit Step-1 preview, offline
 MathML, conditional required markers, .mcy projects and GeoJSON/GeoTIFF/ASC exports
 to the audited source baseline. No new scientific algorithm is claimed.

@@ -1,13 +1,14 @@
 # MeshCherry — Windows desktop
 
-## MeshCherry 3.0 RC8 — bản nguồn thử nghiệm
+## MeshCherry 3.0 RC11 — Windows prerelease
 
-Mã nguồn hiện tại dùng application version `3.0.0rc8`, tiếp nối bản nguồn
-2.9.1. Xem [ghi chú 3.0 RC8](RELEASE_V3.0.0-RC8.md) và hướng dẫn đóng gói tại
-[packaging](GNN/mesh_research/packaging/README.md). Bản cập nhật này công bố mã
-nguồn, chưa phát hành ZIP RC8 trên GitHub Releases. Cần WebView2; Gmsh cài riêng.
+Application version: `3.0.0rc11`. Xem [ghi chú RC11](RELEASE_V3.0.0-RC11.md),
+[bản tải Windows](https://github.com/Pikachu610/MeshCherry/releases/tag/v3.0.0-rc.11)
+và [hướng dẫn đóng gói](GNN/mesh_research/packaging/README.md).
+Giải nén toàn bộ ZIP rồi mở `MeshCherry/MeshCherry.exe`; giữ thư mục `_internal`
+bên cạnh EXE. Cần Windows x64 và WebView2; Gmsh cài riêng.
 
-RC8 là ứng viên thử nghiệm, chưa nghiệm thu đầy đủ giao diện Windows/máy sạch. Bản ổn định
+RC11 là ứng viên thử nghiệm, chưa nghiệm thu đầy đủ giao diện Windows/máy sạch. Bản ổn định
 cũ v2.0.0 được giữ lại để đối chiếu. Chỉ số test không thay thế nghiệm thu desktop.
 
 ## Nền tảng mã nguồn 2.9.1
