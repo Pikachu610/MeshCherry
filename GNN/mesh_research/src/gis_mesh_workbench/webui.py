@@ -38,7 +38,7 @@ WORKSPACE=(Path(sys.executable).resolve().parent/'workspace'
 ARTIFACTS={'manifest':'manifest.json','qa':'qa.json','cells':'cells.json',
            'attributes':'attributes.json','csv':'attributes.csv','preview':'preview.png',
            'msh':'meshing/mesh.msh','mesh':'meshing/mesh.json','gmsh_log':'meshing/gmsh.log',
-           'comparison':'comparison.json'}
+           'comparison':'comparison.json','quality':'quality.json'}
 
 
 class AccessError(ValueError): pass
@@ -70,6 +70,7 @@ class WorkbenchServer(ThreadingHTTPServer):
         self.output_root=self.permitted(self.workspace/'.scratch/gis-mesh-workbench/ui-runs',exists=False,write=True)
         self.output_root.mkdir(parents=True,exist_ok=True)
         self.validated={}; self.jobs={}; self.controls={}; self.current_preflight=None
+        self.quality_latest={}
         self.preflight_generation=0; self.preflight_inflight=set()
         from .download_manager import DownloadManager
         self.downloads=DownloadManager(self)
@@ -606,10 +607,11 @@ class Handler(BaseHTTPRequestHandler):
                      for weight in ('Regular', 'Medium', 'SemiBold', 'Bold')}
             if path in fonts:
                 return self.respond((ASSETS/'fonts'/fonts[path]).read_bytes(), content_type='font/ttf')
-            if path in {'/','/app.js','/coach.js','/attribute_table.js','/downloads.js','/extraction_draft.js','/extraction_draft.css','/attribute_table.css','/workspace_layout.css','/style.css','/wizard.css','/icon.png','/favicon.ico'}:
+            if path in {'/','/app.js','/coach.js','/attribute_table.js','/downloads.js','/extraction_draft.js','/extraction_draft.css','/attribute_table.css','/workspace_layout.css','/style.css','/wizard.css','/icon.png','/favicon.ico','/quality_panel.js','/quality_panel.css','/quality_bridge.js'}:
                 name={'/':'index.html','/icon.png':'meshcherry-icon-v1.png',
                       '/favicon.ico':'meshcherry-icon-v1.ico'}.get(path,path[1:])
                 mime={'index.html':'text/html','app.js':'text/javascript','coach.js':'text/javascript','attribute_table.js':'text/javascript','downloads.js':'text/javascript','extraction_draft.js':'text/javascript','extraction_draft.css':'text/css','attribute_table.css':'text/css','workspace_layout.css':'text/css','style.css':'text/css','wizard.css':'text/css',
+                      'quality_panel.js':'text/javascript','quality_bridge.js':'text/javascript','quality_panel.css':'text/css',
                       'meshcherry-icon-v1.png':'image/png','meshcherry-icon-v1.ico':'image/vnd.microsoft.icon'}[name]
                 body=(ASSETS/name).read_bytes()
                 if name=='index.html':body=body.replace(b'{{APP_VERSION}}',__version__.encode('ascii'))
@@ -842,6 +844,15 @@ class Handler(BaseHTTPRequestHandler):
                 save_checked(self.server.gmsh_preferences,report)
                 return self.respond(report)
             if path=='/api/job/stop': return self.respond(self.server.stop_job(data))
+            if path.startswith('/api/quality/'):
+                from .quality_jobs import start_quality, quality_result, quality_page, quality_export, quality_latest
+                if path=='/api/quality/start': return self.respond(start_quality(self.server,data),202)
+                if path=='/api/quality/result': return self.respond(quality_result(self.server,data))
+                if path=='/api/quality/latest': return self.respond(quality_latest(self.server,data))
+                if path=='/api/quality/page': return self.respond(quality_page(self.server,data))
+                if path=='/api/quality/export':
+                    body,mime,filename=quality_export(self.server,data)
+                    return self.respond(body,content_type=mime,filename=filename)
             if path=='/api/comparison': return self.respond(self.server.start_comparison(data),202)
             if path=='/api/preflight': return self.respond(self.server.validate_form(data))
             if path=='/api/run':

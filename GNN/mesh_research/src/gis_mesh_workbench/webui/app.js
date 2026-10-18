@@ -8,7 +8,7 @@ $('monitor-headline').append(jobHeadline);$('monitor-details').append(jobDetails
 const fragment=new URLSearchParams(location.hash.slice(1));
 const token=fragment.get('token')||sessionStorage.getItem('mesh-cherry-token')||'';
 if(fragment.has('token')){sessionStorage.setItem('mesh-cherry-token',token);history.replaceState(null,'',location.pathname);}
-let roots=[],source=null,preflightId=null,revision=0,busy=false,jobId=null,resultPath='',geometry=[],attrs=new Map(),fitBox=null,mapUnits='',mapCRS='';
+let roots=[],source=null,preflightId=null,revision=0,busy=false,jobId=null,resultPath='',geometry=[],attrs=new Map(),fitBox=null,mapUnits='',mapCRS='',mapOriginX=0,mapOriginY=0;
 const RUN_REQUEST_STORAGE_KEY='mesh-cherry-run-request';
 const ACCEPTED_MESH_STORAGE_KEY='mesh-cherry-accepted-mesh';
 const BATCH_RECOVERY_STORAGE_KEY='mesh-cherry-batch-recovery';
@@ -30,6 +30,7 @@ const MAX_TERMINAL_ARTIFACT_ATTEMPTS=3;
 let attributeTable=null,batchTable=null,batchQueue=[],batchJobId=null,batchCompletedJobId=null,batchMeshId=null,batchPollTimer=null,batchRequestId=null,batchStartUncertain=false,batchRecoveryBlocked=false,downloadPanel=null,downloadUI=null;
 let extractionDraft=null,extractionDraftMode=null,activeBatchFeatures=null,activeBatchPlanHash=null,activeBatchDraft=null;
 let preserveAcceptedDuringRun=false,gmshAdvancedEnabled=false,batchOwnsBusy=false;
+let qualityBridge=null,qualityPanel=null,qualityReport=null,qualityOverlayMetric=null,qualityMeshId=null,qualityBusy=false,qualityDisabledBefore=[];
 function ensureDownloadUI(){
   if(downloadUI)return;
   downloadPanel=document.createElement('section');downloadPanel.id='download-panel';downloadPanel.className='card';downloadPanel.hidden=true;
@@ -600,6 +601,66 @@ async function api(path,data,timeout=0){
     const value=await response.json();if(!response.ok){const error=new Error(value.error||`HTTP ${response.status}`);error.status=response.status;throw error;}return value;
   }finally{if(timer!==null)clearTimeout(timer);}
 }
+function downloadQuality(_path,payload){
+  const extension=payload.format==='csv'?'zip':payload.format;
+  return managedDownload({url:'/api/quality/export',filename:`meshcherry-quality.${extension}`,method:'POST',body:JSON.stringify(payload),kind:'quality',payload,fetchOptions:{headers:{'Content-Type':'application/json'}}});
+}
+function setupQualityPanel(){
+  if(qualityPanel||!window.MeshCherryQualityPanel||!window.MeshCherryQualityBridge)return;
+  qualityBridge=MeshCherryQualityBridge.create({api,download:downloadQuality,onStatus:status=>{setQualityBusy(['running','stopping','queued','pending'].includes(status.status||status.state));qualityPanel?.setStatus?.(status);}});
+  qualityPanel=MeshCherryQualityPanel.mount($('quality-panel-host'),{
+    evaluate:async config=>{if(busy)throw Error('Hãy chờ tác vụ hiện tại kết thúc trước khi chạy QA.');setQualityBusy(true);try{const result=await qualityBridge.run(config,false);qualityReport=result;qualityOverlayMetric='quality_q';drawQualityOverlay();return result;}finally{setQualityBusy(false);}},benchmark:async config=>{if(busy)throw Error('Hãy chờ tác vụ hiện tại kết thúc trước khi benchmark.');setQualityBusy(true);try{const result=await qualityBridge.run(config,true);qualityReport=result;qualityOverlayMetric='quality_q';drawQualityOverlay();return result;}finally{setQualityBusy(false);}},fetchPage:args=>qualityBridge.fetchPage(args),
+    onExport:(format)=>qualityBridge.exportResult(format).then(result=>{if(result?.state==='error')toast('Không xuất được QA: '+result.error);}).catch(error=>toast('Không xuất được QA: '+error.message)),
+    onStop:()=>qualityBridge.stop(),onStatus:status=>setQualityBusy(['running','stopping','queued','pending'].includes(status.status||status.state)),onMetric:metric=>{qualityOverlayMetric=metric;if(metric===null&&fitBox)$('map').setAttribute('viewBox',fitBox.join(' '));drawQualityOverlay();},
+    onFocus:(id)=>{const cell=geometry.find(item=>String(item.cell_id)===String(id));if(!cell)return;selectCell(cell);const [xmin,ymin,xmax,ymax]=meshBounds([cell]);const extent=Math.max(xmax-xmin,ymax-ymin,1e-9),pad=extent*.75,width=extent+2*pad,height=extent+2*pad,mapX=xmin-mapOriginX-pad,mapY=mapOriginY-ymax-pad;$('map').setAttribute('viewBox',[mapX,mapY,width,height].join(' '));}
+  });
+  $('quality-open').addEventListener('click',()=>{$('quality-panel-host').hidden=!$('quality-panel-host').hidden;$('quality-open').textContent=$('quality-panel-host').hidden?'Mở kiểm định':'Thu gọn kiểm định';});
+}
+function qualityControls(){return [...$('form').querySelectorAll('input,select,button'),...$('extract-options').querySelectorAll('input,select,button'),...document.querySelectorAll('button[data-stage],#start-another,#project-open,#project-save,#gmsh-setup-open,#tutorial-help')].filter((node,index,nodes)=>nodes.indexOf(node)===index);}
+function setQualityBusy(value){
+  if(Boolean(value)===qualityBusy)return;qualityBusy=Boolean(value);
+  if(qualityBusy){qualityDisabledBefore=qualityControls().map(node=>[node,node.disabled]);for(const [node] of qualityDisabledBefore)node.disabled=true;}
+  else{for(const [node,disabled] of qualityDisabledBefore)if(node.isConnected)node.disabled=disabled;qualityDisabledBefore=[];}
+  document.body.dataset.qualityBusy=String(qualityBusy);
+}
+function setQualityMesh(mesh){
+  if(!window.MeshCherryQualityPanel||!window.MeshCherryQualityBridge)return;
+  setupQualityPanel();const next=mesh?.jobId||null;
+  if(next!==qualityMeshId){qualityReport=null;qualityOverlayMetric=null;qualityPanel?.clear();const map=$('map');map?.querySelector?.('.qa-heatmap')?.remove();}
+  qualityMeshId=next;qualityBridge?.setMesh(next);
+  if(!mesh){$('quality-entry').hidden=true;return;}
+  $('quality-entry').hidden=false;
+  const expected=next;
+  qualityBridge.restore(expected).then(report=>{
+    if(!report||qualityMeshId!==expected||meshSnapshot?.jobId!==expected)return;
+    qualityReport=report;qualityOverlayMetric='quality_q';qualityPanel?.load(report);drawQualityOverlay();
+  }).catch(error=>{if(qualityMeshId===expected)toast('Không khôi phục được kiểm định đã lưu: '+error.message);});
+}
+function drawQualityOverlay(){
+  if(!qualityReport){const map=$('map');map?.querySelector?.('.qa-heatmap')?.remove();const legend=$('quality-legend');if(legend?.replaceChildren){legend.replaceChildren();legend.hidden=true;}return;}
+  const map=$('map');if(!map?.querySelector||!map?.insertBefore)return;
+  map.querySelector('.qa-heatmap')?.remove();
+  const legend=$('quality-legend');if(!legend?.replaceChildren)return;legend.replaceChildren();legend.hidden=true;
+  if(!qualityOverlayMetric||!meshSnapshot?.cells?.length||meshSnapshot.cells.length>100000)return;
+  const key=qualityOverlayMetric,values=new Map((qualityReport.elements||[]).map(row=>[String(row.element_id),row[key]]));
+  const finite=[...values.values()].filter(value=>typeof value==='number'&&Number.isFinite(value)).sort((a,b)=>a-b);
+  if(!finite.length)return;
+  const lowIsBad=['quality_q','min_angle_deg'].includes(key),palette=lowIsBad?['#922c58','#d94f5d','#ed845c','#f8bd66','#fff0c2']:['#fff0c2','#f8bd66','#ed845c','#d94f5d','#922c58'],quantile=q=>finite[Math.min(finite.length-1,Math.floor((finite.length-1)*q))],constant=finite[0]===finite[finite.length-1],cuts=constant?[]:[...new Set([.2,.4,.6,.8].map(quantile))].filter(value=>value>finite[0]&&value<finite[finite.length-1]),bucketCount=cuts.length+1,colors=constant?['#b8b0a5']:Array.from({length:bucketCount},(_,index)=>palette[Math.round(index*4/Math.max(1,bucketCount-1))]);
+  const group=document.createElementNS('http://www.w3.org/2000/svg','g');group.setAttribute('class','qa-heatmap');group.setAttribute('aria-hidden','true');group.style.pointerEvents='none';
+  const xmin=mapOriginX,ymax=mapOriginY;
+  const bucketPaths=colors.map(()=>[]),missingPaths=[];
+  for(const cell of meshSnapshot.cells){const value=values.get(String(cell.cell_id)),coords=cell.xy.map(([x,y])=>[x-xmin,ymax-y]),path=`M${coords.map(point=>point.join(' ')).join('L')}Z`;
+    if(typeof value==='number'&&Number.isFinite(value)){const bucket=constant?0:cuts.findIndex(cut=>value<=cut);bucketPaths[bucket<0?bucketCount-1:bucket].push(path);}
+    else missingPaths.push(path);
+  }
+  colors.forEach((color,index)=>{if(!bucketPaths[index].length)return;const path=document.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('d',bucketPaths[index].join(''));path.setAttribute('fill',color);path.setAttribute('fill-opacity','.68');group.append(path);});
+  if(missingPaths.length){const path=document.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('d',missingPaths.join(''));path.setAttribute('fill','#8e8588');path.setAttribute('fill-opacity','.38');path.setAttribute('stroke','#51494c');path.setAttribute('stroke-dasharray','2 2');path.setAttribute('stroke-width','.2');group.append(path);}
+  const nodeLayer=map.querySelector('.cell-node')?.parentNode||map.querySelector('.batch-nodes');map.insertBefore(group,nodeLayer||null);
+  legend.hidden=false;const title=document.createElement('strong'),label=MeshCherryQualityPanel.METRICS.find(metric=>metric[0]===key)?.[1]||key;title.textContent=`QA · ${label} · phân bố theo phân vị tương đối`;legend.append(title);
+  colors.forEach((color,index)=>{const item=document.createElement('span'),swatch=document.createElement('i');swatch.style.backgroundColor=color;const binLabel=constant?`Không đổi: ${concise(finite[0])}`:index===0?`≤ ${concise(cuts[0])}`:index===bucketCount-1?`> ${concise(cuts[index-1])}`:`${concise(cuts[index-1])} – ${concise(cuts[index])}`;item.append(swatch,document.createTextNode(binLabel));legend.append(item);});
+  const missing=document.createElement('span'),missingSwatch=document.createElement('i');missingSwatch.style.backgroundColor='#8e8588';missing.append(missingSwatch,document.createTextNode('N/A'));legend.append(missing);
+}
+function loadQualityReport(result){qualityReport=result;qualityPanel?.load(result);drawQualityOverlay();}
 function readableExtractError(message){const text=String(message||'');if(/band.*out of range/i.test(text))return 'Band đã chọn không có trong raster. Chọn band từ 1 đến số band của tệp.';return text;}
 function toast(message){clearTimeout(toastTimer);$('toast').textContent=message;$('toast').hidden=false;toastTimer=setTimeout(()=>{$('toast').hidden=true;},7000);}
 function resetResult(){
@@ -636,7 +697,7 @@ async function refreshRecent(){
   }
 }
 $('recent-clear').onclick=async()=>{if(busy)return;try{await api('/api/recent',{action:'clear'});await refreshRecent();}catch(error){toast(error.message);}};
-function invalidate(){clearComparison();if(!preserveAcceptedDuringRun){meshSnapshot=null;clearAcceptedMesh();$('mesh-quality').hidden=true;}extractMode=false;$('extract-options').hidden=true;revision++;preflightId=null;if(!busy&&!preserveAcceptedDuringRun)resetResult();$('run').disabled=true;$('validation').className='info muted';$('validation').textContent='Cấu hình đã thay đổi. Hãy kiểm tra lại trước khi chạy.';refreshCoach();}
+function invalidate(){clearComparison();if(!preserveAcceptedDuringRun){meshSnapshot=null;clearAcceptedMesh();$('mesh-quality').hidden=true;setQualityMesh(null);}extractMode=false;$('extract-options').hidden=true;revision++;preflightId=null;if(!busy&&!preserveAcceptedDuringRun)resetResult();$('run').disabled=true;$('validation').className='info muted';$('validation').textContent='Cấu hình đã thay đổi. Hãy kiểm tra lại trước khi chạy.';refreshCoach();}
 function mode(){
   if(previewKey&&previewKey!==previewIdentity())clearInputPreview();
   const domain=$('gmsh-domain').value,shp=domain==='shapefile';
@@ -974,7 +1035,7 @@ function draw(cells,records=[],contract={crs:$('crs').value,units:$('units').val
   }
   if(!cells.length){fitBox=null;$('map').removeAttribute('viewBox');return;}
   const boundary=contract.footprint;
-  const [xmin,ymin,xmax,ymax]=meshBounds(cells,boundary),span=Math.max(xmax-xmin,ymax-ymin),pad=span*.07;
+  const [xmin,ymin,xmax,ymax]=meshBounds(cells,boundary);mapOriginX=xmin;mapOriginY=ymax;const span=Math.max(xmax-xmin,ymax-ymin),pad=span*.07;
   fitBox=[-pad,-pad,xmax-xmin+2*pad,ymax-ymin+2*pad];$('map').setAttribute('viewBox',fitBox.join(' '));
   const backdrop=svgElement('g',{}),polygons=svgElement('g',{}),nodes=svgElement('g',{});
   if(boundary){const coords=boundary.xy.map(p=>`${p[0]-xmin},${ymax-p[1]}`).join(' ');backdrop.append(svgElement('polygon',{points:coords,class:'raster-footprint-fill'}));$('map').append(svgElement('polygon',{points:coords,class:'raster-footprint-edge'}));$('raster-extent').hidden=false;const b=boundary.bounds;$('raster-extent').textContent=`Raster trong CRS tính toán · X: ${b[0]} → ${b[2]} m · Y: ${b[1]} → ${b[3]} m${boundary.approximate?' · Biên chuyển CRS xấp xỉ; không thể hiện mask NoData.':''}`;}
@@ -1018,6 +1079,7 @@ function moveMapFocus(event){
   items.forEach((item,i)=>item.setAttribute('tabindex',i===next?0:-1));items[next].focus();
 }
 async function validate(){
+  if(qualityBusy){toast('Hãy chờ kiểm định hiện tại kết thúc trước khi đổi cấu hình.');return;}
   const requestRevision=revision;let cfg;$('validate').disabled=true;$('run').disabled=true;preflightId=null;$('validation').textContent='Đang kiểm tra metadata, hình học và workload…';if(extractMode)$('extract-detail-content').replaceChildren();
   try{requireDomainSelection();if(!extractMode&&!checkParameterFields())throw new Error('Sửa các ô được đánh dấu trước khi kiểm tra.');cfg=config();const data=await api('/api/preflight',cfg);if(requestRevision!==revision){toast('Cấu hình thay đổi trong khi kiểm tra. Hãy kiểm tra lại.');return;}
     const report=data.report;$('validation').className='info '+(report.status==='pass'?'pass':'error');
@@ -1042,7 +1104,7 @@ async function validate(){
 }
 function setBusy(value){busy=value;document.body.dataset.busy=String(value);for(const el of $('extract-options').querySelectorAll('input,select,button'))el.disabled=value;for(const input of $('form').querySelectorAll('input,select,button'))input.disabled=value;for(const control of document.querySelectorAll('button[data-stage],#gmsh-setup-open,#tutorial-help'))control.disabled=value;for(const tab of ['mesh','extract','log'])$('result-'+tab+'-tab').disabled=false;if(!value){mode();helpers();document.querySelector('button[data-stage="4"]').disabled=!jobId||!displayCellCount();$('run').disabled=!preflightId;$('tutorial-finish').disabled=!tutorialActive||tutorialClicks.size!==2;}$('progress').hidden=!value;$('cancel-run').disabled=!value||!jobId||cancelPending;syncDocumentControls();updateExtractReadiness();updateBatchReadiness();refreshCoach();}
 async function startRun(){
-  if(!preflightId||busy||batchJobId)return;const id=preflightId;preflightId=null;if(!preserveAcceptedDuringRun)resetResult();
+  if(!preflightId||busy||batchJobId||qualityBusy)return;const id=preflightId;preflightId=null;if(!preserveAcceptedDuringRun)resetResult();
   if(extractMode&&meshSnapshot){draw(meshSnapshot.cells,[],{crs:meshSnapshot.crs,units:'',display:meshSnapshot.display});showResultTab('extract');}
   setBusy(true);if(!preserveAcceptedDuringRun)$('exports').hidden=true;$('job-status').className='info';$('job-status').textContent='Đang khởi chạy…';jobHeadline.textContent='Đang khởi chạy…';
   $('job-monitor').hidden=false;$('monitor-failure').hidden=true;$('monitor-phase').textContent='Đang khởi chạy…';$('monitor-elapsed').textContent='0 giây';$('monitor-eta').textContent='Chưa đủ dữ liệu để ước tính';$('monitor-percent').textContent='Chưa có phần trăm';$('phase-progress').hidden=true;
@@ -1557,6 +1619,7 @@ $('source-next').onclick=async()=>{try{
   stage(2);
 }catch(error){toast(error.message);}};
 function showMeshQuality(q){
+  setQualityMesh(meshSnapshot);drawQualityOverlay();
   $('mesh-quality').hidden=false;$('mesh-quality').replaceChildren();
   const heading=document.createElement('h3');heading.textContent='Chất lượng lưới';$('mesh-quality').append(heading);
   if(q.sizing_summary){

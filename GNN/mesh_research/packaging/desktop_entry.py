@@ -33,7 +33,8 @@ def self_test(report, gmsh_path=None, boundary_path=None):
         try:
             conn = http.client.HTTPConnection(*server.server_address, timeout=10)
             for asset in ('/', '/coach.js', '/app.js', '/wizard.css', '/attribute_table.js',
-                          '/downloads.js','/extraction_draft.js','/extraction_draft.css','/attribute_table.css','/workspace_layout.css','/fonts/BeVietnamPro-Regular.ttf'):
+                          '/downloads.js','/extraction_draft.js','/extraction_draft.css','/attribute_table.css','/workspace_layout.css',
+                          '/quality_panel.js','/quality_panel.css','/quality_bridge.js','/fonts/BeVietnamPro-Regular.ttf'):
                 conn.request('GET', asset, headers={'Host': server.host})
                 response = conn.getresponse()
                 body = response.read()
@@ -53,6 +54,19 @@ def self_test(report, gmsh_path=None, boundary_path=None):
         finally:
             server.shutdown(); server.server_close(); thread.join(timeout=5)
     root = sample_directory()
+    from gis_mesh_workbench.quality_assessment import evaluate_mesh_quality
+    from gis_mesh_workbench.quality_context import enrich_quality
+    from gis_mesh_workbench.quality_reports import export_quality
+    sample_mesh=dict(schema_version='workbench-cells-v1',crs_wkt='EPSG:32649',coordinate_units='m',
+        cells=[dict(cell_id='qa-right',kind='triangle',xy=[[0.,0.],[1.,0.],[0.,1.]])])
+    assessed=evaluate_mesh_quality(sample_mesh)
+    enrich_quality(assessed,sample_mesh)
+    if not math.isclose(assessed['elements'][0]['quality_q'],0.8284271247461901,rel_tol=1e-12):
+        raise RuntimeError('Frozen triangle quality known answer failed')
+    for fmt in ('json','csv','html'):
+        body,_,_=export_quality(assessed,fmt)
+        if not body:raise RuntimeError('Frozen quality export failed')
+    checks['mesh_quality_assessment']=dict(status='pass',known_answer=True,exports=['json','csv','html'])
     grid = structured_grid(extent=[500000,1000000,500002,1000001],
         cell_width_m=1,cell_height_m=1,analysis_crs='EPSG:32649')
     triangle = import_mesh(root/'two_triangles.json',analysis_crs='EPSG:32649')
@@ -249,6 +263,17 @@ def self_test(report, gmsh_path=None, boundary_path=None):
             frozen_path=Path(mesh_result['output'])/'cells.json'
             frozen_bytes=frozen_path.read_bytes()
             frozen_cells=json.loads(frozen_bytes)['cells']
+            from gis_mesh_workbench.quality_references import load_references
+            frozen_payload=json.loads(frozen_bytes)
+            frozen_manifest=json.loads((frozen_path.parent/'manifest.json').read_text())
+            original_roi,original_size=load_references(frozen_path.parent,frozen_payload,frozen_manifest)
+            assessed=enrich_quality(evaluate_mesh_quality(frozen_payload),frozen_payload,
+                roi=original_roi,size_field=original_size)
+            if assessed['boundary']['status']!='PASS' or assessed['size']['status']=='NOT_AVAILABLE':
+                raise RuntimeError('Frozen retained ROI/size QA failed: '+str(assessed['boundary']))
+            if frozen_path.read_bytes()!=frozen_bytes:raise RuntimeError('QA changed accepted mesh')
+            checks['retained_mesh_quality']=dict(status='pass',
+                boundary=assessed['boundary']['status'],size=assessed['size']['status'],geometry_unchanged=True)
             if (frozen_path.parent/'attributes.json').exists():raise RuntimeError('Mesh-only extracted attributes')
             config['operation']='extract';config['raster_path']=raster_path
             identity=json.loads((frozen_path.parent/'manifest.json').read_text())['geometry_digest']

@@ -1,5 +1,20 @@
 # Mesh research pipeline
 
+## MeshCherry quality assessment (3.2 candidate)
+
+Accepted meshes can be evaluated on demand without remeshing. The quality
+explorer provides triangle Q, minimum angle, aspect ratio, topology/overlap
+diagnostics, retained ROI fidelity, target-size diagnostics, histograms,
+bounded worst-element/issue tables, metric heatmaps, and CSV/JSON/offline HTML.
+Assessment caches can be retained in `.mcy`; mesh/config/metric/reference
+mismatches invalidate the cache. Explicit repeated QA benchmarks report timing
+and sampled process-tree RSS when available. See [the QA guide](docs/MESH_QUALITY.md)
+for definitions, unavailable-data policy, supported limits and reproducible commands.
+
+Original mesh node tags cannot be recovered from coordinate-only cell imports.
+SF-1 Structured target-field interpolation remains unavailable until independently
+verified. Geometry QA does not establish solver accuracy or GNN performance.
+
 This package implements the isolated mesh research track. Its current fixture adapter exists to lock the configuration, artifact and provenance contracts before external mesh generators are introduced.
 
 ## Run the fixture

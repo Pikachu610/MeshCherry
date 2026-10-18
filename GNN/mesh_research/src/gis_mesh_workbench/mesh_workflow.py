@@ -50,22 +50,24 @@ def read_frozen(path, analysis_crs, maximum=1000, expected_digest=None):
 
 
 def quality(cells):
-    polygons=_cells(cells); edges=[]; angles=[]; aspect=[]
+    from .quality_assessment import triangle_metrics
+    polygons=_cells(cells); edges=[]; angles=[]; aspect=[]; q_values=[]
     for c,p in zip(cells,polygons):
         checkpoint()
         lengths=[math.dist(a,b) for a,b in zip(c.xy,c.xy[1:]+c.xy[:1])]
         edges.extend(lengths)
         if c.kind=='triangle':
-            for i,a in enumerate(lengths):
-                b,d=lengths[(i+1)%3],lengths[(i+2)%3]
-                angles.append(math.degrees(math.acos(max(-1,min(1,(b*b+d*d-a*a)/(2*b*d))))))
-            aspect.append(max(lengths)**2/(2*p.area))
+            metrics=triangle_metrics(c.xy)
+            if metrics is not None:
+                angles.extend([metrics['min_angle_deg'],metrics['max_angle_deg']])
+                aspect.append(metrics['aspect_ratio']);q_values.append(metrics['quality_q'])
     union=unary_union(polygons); areas=[p.area for p in polygons]
     return dict(cell_count=len(cells),vertex_count=len({p for c in cells for p in c.xy}),
         total_area_m2=sum(areas),union_area_m2=union.area,overlap_area_m2=max(0,sum(areas)-union.area),
         area_min_m2=min(areas),area_max_m2=max(areas),edge_min_m=min(edges),edge_max_m=max(edges),
         triangle_min_angle_deg=min(angles) if angles else None,
         triangle_max_aspect=max(aspect) if aspect else None,
+        triangle_min_quality_q=min(q_values) if q_values else None,
         aspect_definition='longest edge / altitude to longest edge',
         centres=[dict(cell_id=c.cell_id,x=p.centroid.x,y=p.centroid.y) for c,p in zip(cells,polygons)])
 
@@ -102,6 +104,7 @@ def run_mesh(path,config,progress=None):
         observe('preflight')
         report,cells=preflight(config);write_json(output/'preflight.json',report)
         if report['status']!='pass': raise ValueError('; '.join(report['errors']))
+        generation_started=time.perf_counter()
         if progress:
             try: progress('meshing' if source['kind']=='gmsh_generated' else 'cells')
             except Exception: pass
@@ -115,11 +118,17 @@ def run_mesh(path,config,progress=None):
             stage='cells'
             cells=prepare_cells(config)
         stage='quality'
+        manifest['generation_time_seconds']=time.perf_counter()-generation_started
+        qa_started=time.perf_counter()
         observe('quality')
         write_json(output/'cells.json',dict(schema_version='workbench-cells-v1',crs_wkt=cells.crs_wkt,
             coordinate_units='m',cells=[dict(cell_id=c.cell_id,kind=c.kind,xy=c.xy) for c in cells.cells]))
         identity=geometry_digest(cells.cells,cells.crs_wkt);manifest['geometry_digest']=identity
         qa=quality(cells.cells);qa['geometry_digest']=identity
+        manifest['qa_time_seconds']=time.perf_counter()-qa_started
+        qa['performance']=dict(generation_time_seconds=manifest['generation_time_seconds'],
+            qa_time_seconds=manifest['qa_time_seconds'],
+            generation_scope='cell preparation or Gmsh generation, excluding preflight')
         from .meshing_parameters import request_summary
         sizing_summary=dict(report['meshing_request'])
         if manifest.get('gmsh_generated'):
@@ -146,6 +155,7 @@ def run_mesh(path,config,progress=None):
         write_json(output/'qa.json',dict(status='fail',failed_stage=stage,error=str(error),failure=failure))
     write_json(output/'config.json',config)
     manifest.update(runtime_seconds=time.perf_counter()-started)
+    manifest['pipeline_time_seconds']=manifest['runtime_seconds']
     finalize_manifest(output,manifest)
     result=dict(status=manifest['status'],output=str(output),error=manifest.get('error'))
     if manifest['status']=='fail':result['failure']=manifest['failure']

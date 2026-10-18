@@ -31,14 +31,26 @@ def document_action(server):
 
 
 def _accepted(server, ident):
-    manifest = _json(server.artifact(ident, 'manifest'))
-    if manifest.get('status') != 'pass' or manifest.get('operation') == 'comparison':
+    from .extraction import _digest
+    from .workload_limits import MAX_MESH_BYTES
+    manifest_path=server.artifact(ident, 'manifest')
+    manifest_hash=_digest(manifest_path)
+    manifest = _json(manifest_path)
+    if manifest.get('status') != 'pass' or manifest.get('operation') in {'comparison','quality','batch_extract'}:
         raise ValueError('Chọn kết quả lưới đã hoàn thành.')
-    raw = _json(server.artifact(ident, 'cells'))
+    path=server.artifact(ident, 'cells')
+    if path.stat().st_size>MAX_MESH_BYTES:
+        raise ValueError('Lưới vượt giới hạn kích thước được hỗ trợ.')
+    source_hash=_digest(path)
+    if manifest.get('artifact_hashes',{}).get('cells.json')!=source_hash:
+        raise ValueError('Tệp lưới đã thay đổi so với kết quả được chấp nhận. Hãy mở lại dự án hoặc tạo lưới mới.')
+    raw = _json(path)
     # Extraction artifacts additionally carry adapter provenance and historically
     # lack a schema tag. That metadata is not a geometry change.
     cells = dict(schema_version='workbench-cells-v1', crs_wkt=raw['crs_wkt'],
                  coordinate_units=raw['coordinate_units'], cells=raw['cells'])
+    if _digest(path)!=source_hash or _digest(manifest_path)!=manifest_hash:
+        raise ValueError('Kết quả lưới thay đổi trong khi đang đọc.')
     return manifest, cells
 
 
@@ -66,6 +78,11 @@ def save_project(server, data):
         # artifact describes only the geometry revalidated during this open.
         if history.get('qa') is not None:
             qa = history['qa']
+        # Optional detailed assessment is a hash-bound cache, never acceptance proof.
+        from .quality_jobs import cached_quality_for_mesh
+        latest=cached_quality_for_mesh(server,data['mesh_job_id'])
+        if latest is not None:
+            qa=dict(qa, quality_assessment=latest)
         config = _json(config_path) if config_path.is_file() else history.get('config')
         with tempfile.TemporaryDirectory(dir=server.session_dir, prefix='save-') as temporary:
             path = Path(temporary) / 'project.mcy'
@@ -95,6 +112,16 @@ def open_project(server, raw):
         digest = geometry_digest(parsed, cells['crs_wkt'])
         artifacts = {'cells.json': cells, 'qa.json': dict(status='pass',
             mesh_quality=quality(parsed), historical_qa=saved.get('qa'), restored_project=True)}
+        from .project_io import quality_cache_state
+        historical=saved.get('qa') or {}
+        assessment=historical.get('quality_assessment') if isinstance(historical,dict) else None
+        cache=quality_cache_state(assessment,cells,
+            assessment.get('quality_config') if isinstance(assessment,dict) else None)
+        artifacts['qa.json']['quality_cache']={key:value for key,value in cache.items() if key!='assessment'}
+        if cache['status']=='CURRENT':
+            assessment=dict(assessment,provenance=dict(assessment.get('provenance') or {},
+                restored_from_project=True,metrics_recomputed=False))
+            artifacts['qa.json']['quality_assessment']=assessment
         if saved.get('attributes') is not None:
             artifacts['attributes.json'] = saved['attributes']
         artifacts['project-history.json'] = {'config': saved.get('config'), 'qa': saved.get('qa'),
@@ -120,6 +147,9 @@ def open_project(server, raw):
             server._invalidate_preflight_locked()
             server.jobs[ident] = dict(status='pass', stage='done', operation='mesh_only',
                 result=dict(status='pass', output=str(output)), restored_project=True)
+            if cache['status']=='CURRENT':
+                from .quality_jobs import register_cached_quality
+                register_cached_quality(server,ident,assessment)
         return dict(job_id=ident, has_attributes=saved.get('attributes') is not None,
                     view_settings=saved.get('view_settings') or {},
                     unavailable_inputs=saved.get('unavailable_inputs', []))

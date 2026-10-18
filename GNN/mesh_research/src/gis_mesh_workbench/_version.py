@@ -1,2 +1,2 @@
 """Single application version consumed by packaging, API and UI."""
-__version__ = '3.1.0rc4'
+__version__ = '3.2.0rc1'

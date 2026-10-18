@@ -135,7 +135,7 @@ class BatchAPITests(unittest.TestCase):
             self.assertIn(path.resolve(), self.server.protected_inputs)
             self.assertEqual(self.wait_job(selected['job_id'])['status'], 'pass')
         self.cells_path.write_text(self.cells_path.read_text() + ' ')
-        with self.assertRaisesRegex(ValueError, 'artifact hash'):
+        with self.assertRaisesRegex(ValueError, 'artifact hash|Tệp lưới đã thay đổi'):
             start_batch(self.server, dict(mesh_job_id='accepted-mesh', features=self.specs()))
 
     def test_stop_cancels_active_batch_and_retains_batch_database(self):

@@ -10,9 +10,24 @@ def resolve(server,data):
         if set(data)!={'kind','job_id','name'}:raise ValueError('Unsupported artifact download fields')
         source=server.artifact(data['job_id'],data['name'])
         return source.name,lambda:source,False
-    if kind not in {'project','export','batch'} or set(data)!={'kind','request'} or not isinstance(data['request'],dict):
+    if kind not in {'project','export','batch','quality'} or set(data)!={'kind','request'} or not isinstance(data['request'],dict):
         raise ValueError('Unsupported download request')
     request=data['request']
+    if kind=='quality':
+        from .quality_jobs import quality_export
+        if set(request)!={'job_id','format'} or request.get('format') not in {'json','csv','html'}:
+            raise ValueError('Chọn JSON, CSV hoặc HTML cho báo cáo chất lượng')
+        filenames={'json':'mesh-quality.json','csv':'mesh-quality-csv.zip','html':'mesh-quality.html'}
+        filename=filenames[request['format']]
+        def produce_quality():
+            body,_,_=quality_export(server,request)
+            target=server.session_dir/(uuid.uuid4().hex+Path(filename).suffix)
+            try:target.write_bytes(body)
+            except BaseException:
+                target.unlink(missing_ok=True)
+                raise
+            return target
+        return filename,produce_quality,True
     if kind=='batch':
         from .batch_api import _batch_database, _FORMATS, batch_export_file
         if set(request)!={'job_id','format'} or request.get('format') not in _FORMATS:

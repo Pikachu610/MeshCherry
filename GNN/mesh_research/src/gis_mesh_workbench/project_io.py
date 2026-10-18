@@ -30,6 +30,7 @@ _SECRET_KEY = re.compile(r"(?:token|secret|password|credential|api.?key|access.?
 _PATH_KEY = re.compile(r"(?:^|_)(?:path|root|executable|source_file)$", re.I)
 _ABSOLUTE_PATH = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\|/)")
 _MEMBERS = {"project.json", "cells.json", "qa.json", "config.json", "attributes.json"}
+_QUALITY_METRIC_DEFINITION_VERSION = "meshcherry-triangle-metrics-v1"
 
 
 def _json_bytes(value):
@@ -142,6 +143,63 @@ def _validate_qa(qa, cell_count):
     checks = qa.get("checks")
     if isinstance(checks, dict) and checks.get("cell_count") not in (None, cell_count):
         raise ValueError("QA cell count does not match geometry")
+
+
+def quality_cache_state(assessment, cells, quality_config=None):
+    """Check a nested quality result against the current canonical mesh/config.
+
+    ``cells`` must be the normalized ``workbench-cells-v1`` payload that was
+    passed to the quality evaluator. The saved `.mcy` format remains compatible:
+    this helper only classifies optional cached assessment data.
+    """
+    if assessment is None:
+        return {"status": "NOT_AVAILABLE", "assessment": None,
+                "reason": "No detailed quality assessment is saved."}
+    if not isinstance(assessment, dict):
+        return {"status": "STALE", "assessment": None,
+                "reason": "Saved quality assessment is malformed."}
+    try:
+        from .quality_assessment import (
+            METRIC_DEFINITION_VERSION, quality_config_hash, quality_mesh_hash,
+        )
+        # The caller supplies a normalized accepted snapshot. Cache identity is
+        # not another geometry acceptance gate (avoid repeated overlap scans).
+        if (not isinstance(cells,dict) or cells.get('schema_version')!='workbench-cells-v1'
+                or not isinstance(cells.get('cells'),list) or not 0<len(cells['cells'])<=MAX_MESH_CELLS):
+            raise ValueError('Expected normalized accepted cells')
+        if not isinstance(quality_config, (dict, type(None))):
+            raise ValueError("Quality config must be an object or null")
+        current_mesh_hash = quality_mesh_hash(cells)
+        current_config_hash = quality_config_hash(quality_config)
+    except (ImportError, TypeError, ValueError, KeyError) as exc:
+        return {"status": "STALE", "assessment": None,
+                "reason": f"Current mesh/config could not be verified: {exc}"}
+    checks = (
+        ("mesh_hash", current_mesh_hash),
+        ("config_hash", current_config_hash),
+        ("metric_definition_version", METRIC_DEFINITION_VERSION),
+    )
+    mismatches = [name for name, expected in checks if assessment.get(name) != expected]
+    if 'reference_hash' in assessment:
+        try:
+            from .quality_context import reference_hash
+            references=assessment.get('references', {})
+            expected=reference_hash(references.get('roi'), references.get('size_field'),
+                                    assessment.get('context_config'))
+            if assessment['reference_hash'] != expected:
+                mismatches.append('reference_hash')
+        except (ValueError, TypeError, AttributeError):
+            mismatches.append('reference_hash')
+    if mismatches:
+        return {"status": "STALE", "assessment": assessment,
+                "reason": "Saved assessment does not match current " + ", ".join(mismatches) + "."}
+    return {"status": "CURRENT", "assessment": assessment,
+            "reason": "Mesh, quality config, and metric definitions match."}
+
+
+def validate_cached_quality(assessment, cells, quality_config=None):
+    """Compatibility name for callers that prefer a validation verb."""
+    return quality_cache_state(assessment, cells, quality_config)
 
 
 def _validate_attributes(attributes, cell_ids):
