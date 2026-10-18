@@ -22,7 +22,8 @@ from .adapters import CellSet
 from .extraction import Cell, _cells, _digest
 from .spatial import metric_crs
 from .boundary import read_boundary, geometry_lines
-from .meshing_parameters import CONTROL_SHAPE, PERCENTILE_POSITIONS, RELIEF_GAMMA, GMSH_ALGORITHM
+from .meshing_parameters import (CONTROL_SHAPE, PERCENTILE_POSITIONS, RELIEF_GAMMA,
+    GMSH_ALGORITHM, advanced_meshing_options, validate_advanced_meshing)
 from .workload_limits import MAX_MESH_BYTES, MAX_MESH_NODES, MAX_MSH_ELEMENTS, GMSH_TIMEOUT_SECONDS
 
 
@@ -95,8 +96,25 @@ def inspect_domain(config):
                 inspect_coverage(src,domain)
                 if (lo,hi)!=H_BOUNDS_M: raise ValueError('Profile SF-1 dùng h_min=250 m, h_max=1000 m')
             else: inspect_relief_source(src,dem_band)
+    advanced=validate_advanced_meshing(source)
     return dict(**inspect_executable(source['executable']),cell_count=None,coordinate_units='m',
-        mesh_generation_required=True,extent=[w,s,e,n],sizing=source['sizing'],analysis_crs_wkt=target.to_wkt(),boundary=boundary)
+        mesh_generation_required=True,extent=[w,s,e,n],sizing=source['sizing'],
+        analysis_crs_wkt=target.to_wkt(),boundary=boundary,
+        effective_meshing_controls=advanced)
+
+
+def geo_meshing_controls(source):
+    """Return only allowlisted overrides/actions; legacy defaults add no GEO text."""
+    controls=validate_advanced_meshing(source)
+    lines=[]
+    if controls['algorithm_2d']!=GMSH_ALGORITHM:
+        lines.append(f"Mesh.Algorithm={controls['algorithm_2d']};")
+    if controls['smoothing'] or controls['optimize_2d']:
+        lines.append('Mesh 2;')
+        lines.extend(['OptimizeMesh "Laplace2D";']*controls['smoothing'])
+        lines.extend(['OptimizeMesh "Relocate2D";']*controls['optimize_2d'])
+        lines.append('Save "mesh.msh";')
+    return lines
 
 
 def dem_source(config):
@@ -242,6 +260,7 @@ def generate(config, output):
         'Mesh.MeshSizeFactor=1;',
         'Mesh.MeshSizeFromPoints=0;','Mesh.MeshSizeFromCurvature=0;','Mesh.MeshSizeExtendFromBoundary=0;',
         f'Mesh.MeshSizeMin={lo:.17g};',f'Mesh.MeshSizeMax={hi:.17g};']
+    geo_controls=geo_meshing_controls(source)
     lines+=geometry_lines(domain)
     write_json(directory/'domain-boundary.json',dict(geometry=mapping(domain),crs_wkt=target.to_wkt()))
     if source['sizing']=='sf1_relief':
@@ -249,9 +268,15 @@ def generate(config, output):
     else:
         lines+=['Merge "size.pos";','Field[1]=PostView;','Field[1].ViewIndex=0;','Background Field=1;'] if source['sizing']=='relief' else [
             'Field[1]=MathEval;',f'Field[1].F="{hi:.17g}";','Background Field=1;']
+    lines+=geo_controls
     geo=directory/'domain.geo'; geo.write_text('\n'.join(lines),encoding='utf-8')
     observe('meshing')
-    result=run_logged([evidence['executable'],str(geo),'-2','-format','msh2','-o',str(directory/'mesh.msh'),'-nopopup','-nt','1'],
+    effective_controls=advanced_meshing_options(source)
+    explicitly_meshed=bool(effective_controls['smoothing'] or effective_controls['optimize_2d'])
+    command=[evidence['executable'],str(geo)]
+    command.append('-parse_and_exit' if explicitly_meshed else '-2')
+    command+=['-format','msh2','-o',str(directory/'mesh.msh'),'-nopopup','-nt','1']
+    result=run_logged(command,
         directory/'gmsh.log',GMSH_TIMEOUT_SECONDS,cwd=directory)
     if result.returncode: raise ValueError('Gmsh thất bại; xem meshing/gmsh.log')
     if _digest(Path(evidence['executable']))!=evidence['executable_sha256']: raise ValueError('Executable thay đổi')
@@ -268,7 +293,8 @@ def generate(config, output):
     write_json(directory/'mesh.json',dict(schema_version='mesh-artifact-v0',crs=target.to_wkt(),coordinate_units='m',
         vertices=list(vertices.values()),triangles=[[xylookup[p] for p in c.xy] for c in cells]))
     components=list(domain.geoms) if domain.geom_type=='MultiPolygon' else [domain]
-    evidence.update(size_field=field,cell_count=len(cells),domain_coverage='pass',
+    evidence.update(size_field=field,effective_meshing_controls=effective_controls,
+        requested_meshing_controls=source.get('advanced'),cell_count=len(cells),domain_coverage='pass',
         component_count=len(components),hole_count=sum(len(p.interiors) for p in components),
         domain_area_m2=domain.area,mesh_union_area_m2=union.area,symmetric_difference_area_m2=union.symmetric_difference(domain).area,
         boundary_status='UNVERIFIED',graph_kind='cell centres; no routing',mesh_sha256=_digest(directory/'mesh.msh'))

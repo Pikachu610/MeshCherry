@@ -20,7 +20,7 @@ class DesktopTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             server=WorkbenchServer(directory); view=MagicMock()
             validated=[]
-            def validate_filter(dialog_type, *, allow_multiple, file_types):
+            def validate_filter(dialog_type, *, allow_multiple, file_types, **kwargs):
                 # This is the same validator used by Window.create_file_dialog.
                 parsed=tuple(parse_file_type(file_type) for file_type in file_types)
                 validated.append((dialog_type,allow_multiple,file_types,parsed))
@@ -39,6 +39,12 @@ class DesktopTests(unittest.TestCase):
                     self.assertEqual(validated[-1][2],expected)
                 self.assertEqual([entry[3][0][1] for entry in validated],
                     ['*.tif;*.tiff;*.asc','*.json','*.shp','*.exe'])
+                server.choose_native({'kind':'raster_many'})
+                self.assertTrue(validated[-1][1])
+                self.assertEqual(validated[-1][3][0][1],'*.tif;*.tiff;*.asc')
+                self.assertIsNone(server.native_save('MeshCherry.mcy'))
+                self.assertEqual(validated[-1][0],view.FileDialog.SAVE)
+                self.assertEqual(validated[-1][3][0][1],'*.mcy')
                 server.choose_native({'kind':'output'})
                 self.assertEqual(view.create_window.return_value.create_file_dialog.call_args.args[0],view.FileDialog.FOLDER)
             view.start.side_effect=start

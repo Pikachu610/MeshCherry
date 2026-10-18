@@ -20,6 +20,7 @@ from .gmsh_meshing import inspect_domain, generate as generate_gmsh
 from .indexed_extraction import extract_indexed, estimate, limits as indexed_limits, process_memory
 from .build_info import identity
 from .job_control import Cancelled, checkpoint, current, observe, finalize_manifest
+from .failure_details import describe_failure
 
 
 def write_json(path, value):
@@ -109,6 +110,9 @@ def validate_config(config):
         raise ValueError('Cấu hình phải là một đối tượng JSON.')
     source=config.get('cell_source')
     if not isinstance(source,dict):source={}
+    if source.get('kind')=='gmsh_generated' and 'advanced' in source:
+        from .meshing_parameters import validate_advanced_meshing
+        validate_advanced_meshing(source)
     if config.get('schema_version')=='gis-workbench-run-config-v2' and source.get('kind')=='gmsh_generated':
         if ('roi_raster_path' in source and source.get('roi_raster_path')==''
                 and not source.get('extent') and not source.get('boundary_path')):
@@ -433,9 +437,10 @@ def run(config_path, progress=None):
         manifest.update(status='cancelled',cancelled_stage=stage,error=str(error))
         write_json(output/'qa.json',dict(status='cancelled',cancelled_stage=stage,error=str(error)))
     except Exception as error:
-        manifest.update(failed_stage=stage,error=str(error))
+        failure = describe_failure(error)
+        manifest.update(failed_stage=stage,error=str(error),failure=failure)
         write_json(output/'preflight.json',report)
-        write_json(output/'qa.json',dict(status='fail',failed_stage=stage,error=str(error)))
+        write_json(output/'qa.json',dict(status='fail',failed_stage=stage,error=str(error),failure=failure))
     manifest.update(finished_at=datetime.now(timezone.utc).isoformat(),
                     runtime_seconds=time.perf_counter()-started,
                     peak_memory_status='not_measured')
@@ -446,4 +451,7 @@ def run(config_path, progress=None):
     if progress is not None:
         try: progress('done' if manifest['status']=='pass' else manifest['status'])
         except Exception: pass
-    return dict(status=manifest['status'],output=str(output),error=manifest.get('error'))
+    result = dict(status=manifest['status'],output=str(output),error=manifest.get('error'))
+    if manifest['status'] == 'fail':
+        result['failure'] = manifest['failure']
+    return result

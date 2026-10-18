@@ -15,6 +15,7 @@ from .spatial import metric_crs
 from .workload_limits import MAX_MESH_BYTES
 from .build_info import identity as application_identity
 from .job_control import Cancelled, checkpoint, current, observe, finalize_manifest
+from .failure_details import describe_failure
 
 
 def geometry_digest(cells, crs):
@@ -96,6 +97,7 @@ def run_mesh(path,config,progress=None):
         application_build=application_identity(),
         config_sha256=config_hash,input_hashes=input_hashes,effective_contract=dict(analysis_crs_wkt=metric_crs(config['analysis_crs']).to_wkt()))
     manifest.update(raster_inputs=raster_bundles,hash_scope=HASH_SCOPE)
+    stage='preflight'
     try:
         observe('preflight')
         report,cells=preflight(config);write_json(output/'preflight.json',report)
@@ -104,10 +106,15 @@ def run_mesh(path,config,progress=None):
             try: progress('meshing' if source['kind']=='gmsh_generated' else 'cells')
             except Exception: pass
         if source['kind']=='gmsh_generated':
+            stage='meshing'
             cells,evidence=generate(config,output);manifest['gmsh_generated']=evidence
         elif source['kind']=='gmsh_reference':
+            stage='meshing'
             raise ValueError('Reference preset is not a mesh-first ROI source')
-        elif cells is None: cells=prepare_cells(config)
+        elif cells is None:
+            stage='cells'
+            cells=prepare_cells(config)
+        stage='quality'
         observe('quality')
         write_json(output/'cells.json',dict(schema_version='workbench-cells-v1',crs_wkt=cells.crs_wkt,
             coordinate_units='m',cells=[dict(cell_id=c.cell_id,kind=c.kind,xy=c.xy) for c in cells.cells]))
@@ -123,6 +130,7 @@ def run_mesh(path,config,progress=None):
             sizing_summary['size_field']=evidence['size_field']
         qa['sizing_summary']=sizing_summary;manifest['meshing_request']=sizing_summary
         write_json(output/'qa.json',dict(status='pass',mesh_quality=qa,sizing_summary=sizing_summary))
+        stage='serialization'
         observe('serialization')
         preview(output/'preview.png',cells.cells)
         if _digest(path)!=config_hash: raise ValueError('Mesh config changed during run')
@@ -133,9 +141,12 @@ def run_mesh(path,config,progress=None):
         manifest.update(status='cancelled',error=str(error),cancelled_stage=current().phase if current() else 'unknown')
         write_json(output/'qa.json',dict(status='cancelled',error=str(error)))
     except Exception as error:
-        manifest['error']=str(error)
-        write_json(output/'qa.json',dict(status='fail',error=str(error)))
+        failure=describe_failure(error)
+        manifest.update(error=str(error),failed_stage=stage,failure=failure)
+        write_json(output/'qa.json',dict(status='fail',failed_stage=stage,error=str(error),failure=failure))
     write_json(output/'config.json',config)
     manifest.update(runtime_seconds=time.perf_counter()-started)
     finalize_manifest(output,manifest)
-    return dict(status=manifest['status'],output=str(output),error=manifest.get('error'))
+    result=dict(status=manifest['status'],output=str(output),error=manifest.get('error'))
+    if manifest['status']=='fail':result['failure']=manifest['failure']
+    return result

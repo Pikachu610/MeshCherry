@@ -45,16 +45,25 @@ def launch(workspace=WORKSPACE, webview_module=None, preferences=None, startup_p
             min_size=(820, 620))
         def native_picker(kind):
             filters = {'raster': ('Raster GeoTIFF and ASC (*.tif;*.tiff;*.asc)',),
+                       'raster_many': ('Raster GeoTIFF and ASC (*.tif;*.tiff;*.asc)',),
                        'mesh': ('Mesh JSON (*.json)',),
                        'boundary': ('Shapefile boundary (*.shp)',),
                        'gmsh': ('Gmsh executable (*.exe)',)}
             return _invoke_dialog(lambda: window.create_file_dialog(
                 webview_module.FileDialog.FOLDER if kind == 'output' else webview_module.FileDialog.OPEN,
-                allow_multiple=False, file_types=filters.get(kind, ())))
+                allow_multiple=kind=='raster_many', file_types=filters.get(kind, ())))
         server.native_picker = native_picker
+        def native_save(filename):
+            suffix=Path(filename).suffix.lower()
+            file_types=(f'Artifact (*{suffix})',) if suffix else ()
+            return _invoke_dialog(lambda: window.create_file_dialog(
+                webview_module.FileDialog.SAVE, allow_multiple=False,
+                save_filename=filename, file_types=file_types))
+        server.native_save = native_save
         def closing():
             with server.lock:
-                if server.picker_active or any(job['status'] in {'running','stopping'} for job in server.jobs.values()):
+                if (server.picker_active or server.downloads.active or
+                        any(job['status'] in {'running','stopping'} for job in server.jobs.values())):
                     return False
         window.events.closing += closing
         # No privileged js_api is exposed. Closing the window returns start().

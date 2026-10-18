@@ -1,6 +1,7 @@
 """Portable entry point. Self-test exercises the frozen backend, not a mock."""
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -20,13 +21,19 @@ def self_test(report, gmsh_path=None, boundary_path=None):
     import webview
     import clr
     checks = {}
+    from gis_mesh_workbench.failure_details import describe_failure
+    failure = describe_failure('cells overlap in positive area')
+    if failure['code'] != 'cell_overlap' or not failure['message'] or not failure['actions']:
+        raise RuntimeError('Frozen actionable failure descriptions unavailable')
+    checks['failure_guidance'] = dict(status='pass', code=failure['code'])
     with tempfile.TemporaryDirectory(prefix='meshcherry-smoke-') as directory:
         server = WorkbenchServer(directory)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
             conn = http.client.HTTPConnection(*server.server_address, timeout=10)
-            for asset in ('/', '/coach.js', '/app.js', '/wizard.css', '/fonts/BeVietnamPro-Regular.ttf'):
+            for asset in ('/', '/coach.js', '/app.js', '/wizard.css', '/attribute_table.js',
+                          '/downloads.js','/attribute_table.css','/workspace_layout.css','/fonts/BeVietnamPro-Regular.ttf'):
                 conn.request('GET', asset, headers={'Host': server.host})
                 response = conn.getresponse()
                 body = response.read()
@@ -57,6 +64,24 @@ def self_test(report, gmsh_path=None, boundary_path=None):
         if values != expected:
             raise RuntimeError(f'{name} result differs: {values}')
         checks[name] = values
+    from gis_mesh_workbench.batch_extraction import run_batch,preview_batch,export_wide_csv,export_json
+    from gis_mesh_workbench.mesh_workflow import geometry_digest
+    with tempfile.TemporaryDirectory(prefix='meshcherry-batch-smoke-') as directory:
+        database=Path(directory)/'batch.sqlite'
+        features=[dict(name=name,path=str(root/'sample_10_30.tif'),band=1,
+                       semantics='intensive',value_units='synthetic-value') for name in ('first','second')]
+        batch=run_batch(database,triangle.cells,features,cell_crs='EPSG:32649',analysis_crs='EPSG:32649',
+                        accepted_geometry_digest=geometry_digest(triangle.cells,'EPSG:32649'))
+        page=preview_batch(database,limit=10)
+        if batch['status']!='complete' or page['total_cells']!=2:
+            raise RuntimeError('Frozen batch extraction failed')
+        actual=sorted(row['values']['first'] for row in page['rows'])
+        if len(actual)!=2 or not all(math.isclose(value,expected,rel_tol=1e-12,abs_tol=1e-12)
+                                    for value,expected in zip(actual,[15,25])):
+            raise RuntimeError('Frozen batch attribute values differ')
+        export_wide_csv(database,Path(directory)/'batch.csv')
+        export_json(database,Path(directory)/'batch.json')
+        checks['batch_extraction']=dict(status='pass',features=2,cells=2,preview=True,exports=['csv','json'])
     if 'Bé' in (ASSETS/'index.html').read_text(encoding='utf-8'):
         raise RuntimeError('Old UI wording remains')
     checks['pythonnet_import'] = 'pass'
@@ -110,7 +135,6 @@ def self_test(report, gmsh_path=None, boundary_path=None):
             checks['startup_mcy']=dict(status='pass',explicit_file_only=True,consumed_once=True)
         finally:
             startup_server.shutdown();startup_server.server_close();startup_thread.join(timeout=5)
-        import math
         restored_values=[r['value'] for r in restored['attributes']['cells']]
         original_values=[r['value'] for r in attributes['cells']]
         if ([c.cell_id for c in restored['cell_objects']]!=[c.cell_id for c in triangle.cells]

@@ -1,0 +1,360 @@
+/* Full-width task workspaces. Loaded after style.css and wizard.css. */
+body[data-workspace="roi"],
+body[data-workspace="mesh"],
+body[data-workspace="extract"],
+body[data-workspace="log"] {
+  --workspace-gap: clamp(14px, 1.5vw, 24px);
+}
+
+body[data-workspace] main {
+  width: 100%;
+  max-width: none;
+  padding-inline: clamp(16px, 2.4vw, 40px);
+}
+
+body[data-workspace] [hidden] {
+  display: none !important;
+}
+
+body[data-workspace] .workflow {
+  display: none;
+}
+
+.monitor-failure {
+  margin: 12px 0;
+  padding: 12px 16px;
+  border: 1px solid #e7b9c6;
+  border-radius: 12px;
+  background: #fff5f6;
+  color: #51202d;
+}
+
+.monitor-failure h3,
+.monitor-failure p {
+  margin: 0 0 6px;
+}
+
+.monitor-failure ul {
+  margin: 6px 0 0;
+  padding-left: 20px;
+}
+
+.workspace-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 0 0 18px;
+  padding: 7px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-panel, 18px);
+  background: #f0ebe8;
+  scrollbar-width: thin;
+}
+
+.workspace-nav button {
+  flex: 1 0 auto;
+  min-width: max-content;
+  min-height: 44px;
+  border-color: transparent;
+  background: transparent;
+  white-space: nowrap;
+}
+
+.workspace-nav button[aria-current="page"],
+.workspace-nav button[aria-pressed="true"] {
+  color: var(--cherry);
+  border-color: var(--line);
+  background: #fffefd;
+  box-shadow: 0 2px 5px #342d3108;
+}
+
+body[data-workspace] .workspace {
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--workspace-gap);
+  width: 100%;
+  min-width: 0;
+  align-items: start;
+}
+
+body[data-workspace] .workspace > aside,
+body[data-workspace] .workspace > .viewer,
+body[data-workspace] #form,
+body[data-workspace] .wizard-panel,
+body[data-workspace] .result-pane {
+  width: 100%;
+  min-width: 0;
+}
+
+@media (min-width: 1100px) {
+  body[data-workspace="roi"] .workspace {
+    grid-template-columns: minmax(340px, .8fr) minmax(0, 1.2fr);
+  }
+}
+
+body[data-workspace="extract"] .workspace > .viewer,
+body[data-workspace="log"] .workspace > .viewer {
+  display: none;
+}
+
+body[data-workspace="extract"] #form {
+  display: none;
+}
+
+body[data-workspace] .wizard-panel,
+body[data-workspace] .result-pane > .card {
+  max-width: none;
+}
+
+body[data-workspace="mesh"] #form .wizard-panel[data-panel="2"]:not([hidden]) {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  align-items: start;
+  gap: 14px 18px;
+}
+
+body[data-workspace="mesh"] #form .wizard-panel[data-panel="2"] > h2,
+body[data-workspace="mesh"] #mesh-field-error,
+body[data-workspace="mesh"] .mode-choices,
+body[data-workspace="mesh"] #gmsh-options,
+body[data-workspace="mesh"] #sf1-controls,
+body[data-workspace="mesh"] #relief-controls,
+body[data-workspace="mesh"] #parameter-preview,
+body[data-workspace="mesh"] #resolution-options,
+body[data-workspace="mesh"] #form .wizard-panel[data-panel="2"] > .field-help,
+body[data-workspace="mesh"] #form .wizard-panel[data-panel="2"] > .actions {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+body[data-workspace="mesh"] #domain-options,
+body[data-workspace="mesh"] #grid-options,
+body[data-workspace="mesh"] #mesh-options,
+body[data-workspace="mesh"] #dem-options,
+body[data-workspace="mesh"] #dem-preview,
+body[data-workspace="mesh"] .two.parameter-fields {
+  grid-column: span 6;
+  min-width: 0;
+}
+
+body[data-workspace="mesh"] #gmsh-options:not([hidden]) {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 12px 18px;
+}
+
+body[data-workspace="mesh"] #gmsh-options > h3,
+body[data-workspace="mesh"] #gmsh-options > .field-help,
+body[data-workspace="mesh"] #gmsh-options > #sf1-controls,
+body[data-workspace="mesh"] #gmsh-options > #relief-controls {
+  grid-column: 1 / -1;
+}
+
+body[data-workspace="mesh"] #gmsh-options > .configuration-group,
+body[data-workspace="mesh"] #gmsh-options > #dem-preview {
+  grid-column: span 6;
+  min-width: 0;
+}
+
+body[data-workspace="mesh"] #gmsh-options .configuration-group,
+body[data-workspace="mesh"] #gmsh-options details,
+body[data-workspace="mesh"] #resolution-options,
+body[data-workspace="mesh"] #domain-options,
+body[data-workspace="mesh"] #grid-options {
+  overflow-wrap: anywhere;
+}
+
+body[data-workspace="extract"] #extract-result-panel,
+body[data-workspace="extract"] #attribute-preview,
+body[data-workspace="extract"] #batch-panel {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+}
+
+body[data-workspace="extract"][data-extract-mode="batch"] #attribute-preview {
+  display: none !important;
+}
+
+body[data-workspace="extract"] #extract-result-panel,
+body[data-workspace="log"] #result-log-panel {
+  display: block;
+}
+
+body[data-workspace="extract"][data-extract-mode="single"] #extract-options:not([hidden]),
+body[data-workspace="extract"][data-extract-mode="batch"] #batch-panel:not([hidden]) {
+  display: block;
+}
+
+.extract-mode-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 16px;
+}
+
+.extract-mode-nav button[aria-pressed="true"],
+.extract-mode-nav button[aria-current="page"] {
+  color: var(--cherry);
+  border-color: #d28c9d;
+  background: var(--pink);
+}
+
+body[data-workspace="extract"][data-extract-mode="single"] #extract-options:not([hidden]),
+body[data-workspace="extract"][data-extract-mode="batch"] #batch-panel:not([hidden]) {
+  grid-column: 1 / -1;
+}
+
+body[data-workspace="extract"] #extract-options > .two,
+body[data-workspace="extract"] #batch-panel > .two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 18px;
+}
+
+body[data-workspace="extract"] #batch-queue {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  max-height: min(48vh, 520px);
+  margin: 12px 0;
+  padding: 2px;
+  overflow: auto;
+  list-style: none;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+body[data-workspace="extract"] #batch-queue > li {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.7fr) minmax(120px, 1.2fr)
+    minmax(75px, .55fr) minmax(130px, 1fr) minmax(190px, 1.5fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-control, 10px);
+  background: #fffefd;
+}
+
+body[data-workspace="extract"] #batch-queue > li > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+body[data-workspace="extract"] #batch-queue .batch-queue-field {
+  display: grid;
+  gap: 4px;
+  align-content: center;
+}
+
+body[data-workspace="extract"] #batch-queue .batch-queue-field > label {
+  margin: 0;
+  font-size: 11px;
+}
+
+body[data-workspace="extract"] #batch-queue .batch-queue-path {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+body[data-workspace="extract"] #batch-queue .batch-queue-path {
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+}
+
+body[data-workspace="extract"] #batch-feature-status {
+  max-height: min(35vh, 360px);
+  overflow: auto;
+  overflow-wrap: anywhere;
+  overscroll-behavior: contain;
+}
+
+body[data-workspace="extract"] #batch-table {
+  width: 100%;
+  max-width: 100%;
+  max-height: min(68vh, 760px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+body[data-workspace="extract"] #batch-table > * {
+  min-width: 0;
+}
+
+body[data-workspace="log"] #result-log-panel,
+body[data-workspace="log"] #job-console-panel,
+body[data-workspace="log"] #job-log {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+}
+
+@media (max-width: 1000px) {
+  body[data-workspace="mesh"] #form .wizard-panel[data-panel="2"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body[data-workspace="mesh"] #form .wizard-panel[data-panel="2"] > *,
+  body[data-workspace="mesh"] #domain-options,
+  body[data-workspace="mesh"] #grid-options,
+  body[data-workspace="mesh"] #mesh-options,
+  body[data-workspace="mesh"] #dem-options,
+  body[data-workspace="mesh"] #dem-preview,
+  body[data-workspace="mesh"] .two.parameter-fields {
+    grid-column: 1 / -1;
+  }
+
+  body[data-workspace="mesh"] #gmsh-options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body[data-workspace="mesh"] #gmsh-options > * {
+    grid-column: 1 / -1;
+  }
+
+  body[data-workspace="extract"] #batch-queue > li {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body[data-workspace="extract"] #batch-queue .batch-queue-path,
+  body[data-workspace="extract"] #batch-queue > li > button {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 640px) {
+  body[data-workspace] main {
+    padding-inline: 12px;
+  }
+
+  .workspace-nav {
+    margin-bottom: 12px;
+  }
+
+  body[data-workspace="mesh"] #form .wizard-panel[data-panel="2"],
+  body[data-workspace="mesh"] #gmsh-options {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body[data-workspace="mesh"] #form .wizard-panel[data-panel="2"] > *,
+  body[data-workspace="mesh"] #gmsh-options > * {
+    grid-column: 1 / -1;
+  }
+
+  body[data-workspace="extract"] #extract-options > .two,
+  body[data-workspace="extract"] #batch-panel > .two {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body[data-workspace="extract"] #batch-queue > li {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body[data-workspace="extract"] #batch-queue > li > * {
+    grid-column: 1 / -1;
+  }
+}

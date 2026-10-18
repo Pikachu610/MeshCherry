@@ -318,11 +318,67 @@ test('terminal monitor distinguishes cancelled and failure from still stopping',
   assert.equal(t.get('monitor-phase').textContent,'Thất bại');
   assert.equal(t.get('job-console-panel').hidden,true);
 });
+test('failed job shows structured user guidance before manifest fetch and keeps technical error',async()=>{
+  const t=setup();
+  t.context.calls=[];
+  t.run("jobId='failed-job';busy=true;api=async(path)=>{calls.push(path);if(path.startsWith('/api/job-log'))return{text:'',next_cursor:0};if(path.startsWith('/api/job?id='))return{status:'fail',stage:'meshing',result:{output:'runs/failed-job',error:'cells overlap with positive area',failure:{code:'mesh_cells_overlap',title:'Các ô lưới đang chồng lấn',message:'Gmsh tạo ra các ô có phần diện tích giao nhau; lưới này chưa được chấp nhận.',actions:['Giảm kích thước ô mục tiêu rồi tạo lại lưới.']}}};if(path.includes('name=manifest'))throw Error('manifest unavailable');throw Error('unexpected request')};");
+  await t.run('pollJob()');
+  assert.equal(t.get('monitor-failure').hidden,false);
+  assert.equal(t.get('monitor-failure-title').textContent,'Các ô lưới đang chồng lấn');
+  assert.match(t.get('monitor-failure-message').textContent,/phần diện tích giao nhau/);
+  assert.match(t.get('monitor-failure-actions').children[0].textContent,/Giảm kích thước ô mục tiêu/);
+  assert.match(t.get('job-status').textContent,/cells overlap with positive area/);
+  assert.doesNotMatch(t.run('jobHeadline.textContent'),/Mở chi tiết kỹ thuật để xem lỗi/);
+  assert.equal(t.context.calls.some(path=>path.includes('name=manifest')),false);
+});
+test('unknown failure uses safe actionable fallback and cancellation hides failure guidance',()=>{
+  const t=setup();
+  t.run("renderMonitor({status:'fail',stage:'meshing',result:{error:'Cells overlap with positive area'}})");
+  assert.equal(t.get('monitor-failure-title').textContent,'Các ô lưới đang chồng lấn');
+  assert.match(t.get('monitor-failure-message').textContent,/diện tích dương/);
+  t.run("renderMonitor({status:'fail',stage:'meshing',result:{error:'<script>private diagnostic</script>'}})");
+  assert.equal(t.get('monitor-failure-title').textContent,'Tác vụ chưa hoàn tất');
+  assert.match(t.get('monitor-failure-message').textContent,/Mở Chi tiết kỹ thuật/);
+  assert.doesNotMatch(t.get('monitor-failure-message').textContent,/private diagnostic|<script>/);
+  assert.equal(t.get('monitor-failure-actions').children.length,1);
+  assert.match(t.get('monitor-failure-actions').children[0].textContent,/lỗi gốc và hướng xử lý/);
+  assert.equal(t.get('monitor-failure-actions').hidden,false);
+  t.run("renderMonitor({status:'cancelled',stage:'cancelled'})");
+  assert.equal(t.get('monitor-failure').hidden,true);
+});
+test('legacy unknown job keeps raw error in technical details only',async()=>{
+  const t=setup(),raw='failed reading D:\\\\private\\\\source.tif token=secret';
+  t.run("jobId='legacy-job';busy=true;");
+  t.context.raw=raw;
+  t.run("api=async path=>path.startsWith('/api/job-log')?{text:'',next_cursor:0}:{status:'fail',stage:'meshing',result:{output:'runs/legacy-job',error:raw}}");
+  await t.run('pollJob()');
+  assert.equal(t.get('monitor-failure-title').textContent,'Tác vụ chưa hoàn tất');
+  assert.doesNotMatch(t.get('monitor-failure-message').textContent,/source\.tif|token=secret/);
+  assert.match(t.get('monitor-failure-actions').children[0].textContent,/Chi tiết kỹ thuật/);
+  assert.match(t.get('job-status').textContent,/source\.tif.*token=secret/);
+});
+test('failed extract restores accepted mesh but keeps safe headline and raw diagnostic details',async()=>{
+  const t=setup(),raw='failed reading D:\\\\private\\\\source.tif token=secret';
+  t.run("jobId='extract-failed';busy=true;extractMode=true;meshSnapshot={jobId:'mesh-accepted',path:'mesh/output/cells.json',output:'mesh/output',hasMsh:true,cells:[{cell_id:'a',kind:'triangle',xy:[[0,0],[1,0],[0,1]]}],crs:'EPSG:32649',qa:{mesh_quality:{}}};showMeshQuality=()=>{};");
+  t.context.raw=raw;
+  t.run("api=async path=>path.startsWith('/api/job-log')?{text:'',next_cursor:0}:{status:'fail',stage:'extraction',result:{output:'runs/extract-failed',error:raw,failure:{code:'unknown_failure',title:'Extract chưa hoàn tất',message:'Không thể hoàn tất extract. Mở Chi tiết kỹ thuật để xem nguyên nhân.',actions:['Kiểm tra cấu hình nguồn rồi thử lại.']}}}");
+  await t.run('pollJob()');
+  assert.equal(t.run('jobId'),'mesh-accepted');
+  assert.equal(t.get('exports').hidden,false);
+  assert.match(t.get('monitor-failure-message').textContent,/Mở Chi tiết kỹ thuật/);
+  assert.doesNotMatch(t.get('monitor-failure-message').textContent,/source\.tif|token=secret/);
+  assert.doesNotMatch(t.get('extract-status').textContent,/source\.tif|token=secret/);
+  assert.match(t.get('extract-status').textContent,/Extract chưa hoàn tất/);
+  assert.match(t.run('jobHeadline.textContent'),/Extract chưa hoàn tất.*Lưới đã lưu vẫn được giữ nguyên/);
+  assert.match(t.get('job-status').textContent,/source\.tif.*token=secret/);
+  assert.match(t.get('job-status').textContent,/Diagnostic: runs\/extract-failed/);
+});
 test('cancelled extract restores mesh exports but no stale CSV',async()=>{
-  const t=setup();t.run("jobId='extract';busy=true;extractMode=true;meshSnapshot={jobId:'mesh',path:'mesh/output/cells.json',output:'mesh/output',hasMsh:true,cells:[{cell_id:'a',kind:'triangle',xy:[[0,0],[1,0],[0,1]]}],crs:'EPSG:32649',qa:{mesh_quality:{}}};showMeshQuality=()=>{};api=async(path)=>path.startsWith('/api/job-log')?{text:'',next_cursor:0}:{status:'cancelled',stage:'cancelled',result:{output:null,error:'stopped'}}");
+  const t=setup();t.context.calls=[];t.run("jobId='extract';busy=true;extractMode=true;meshSnapshot={jobId:'mesh',path:'mesh/output/cells.json',output:'mesh/output',hasMsh:true,cells:[{cell_id:'a',kind:'triangle',xy:[[0,0],[1,0],[0,1]]}],crs:'EPSG:32649',qa:{mesh_quality:{}}};showMeshQuality=()=>{};api=async(path)=>{calls.push(path);return path.startsWith('/api/job-log')?{text:'',next_cursor:0}:{status:'cancelled',stage:'cancelled',result:{output:null,error:'stopped'}}}");
   await t.run('pollJob()');assert.equal(t.run('busy'),false);assert.equal(t.run('jobId'),'mesh');assert.equal(t.run('attrs.size'),0);
   assert.equal(t.get('exports').hidden,false);assert.equal(t.get('csv').hidden,true);assert.equal(t.get('msh').hidden,false);
   assert.match(t.run('jobHeadline.textContent'),/Lưới.*giữ nguyên/);
+  assert.equal(t.context.calls.some(path=>path.includes('name=manifest')),false);
 });
 test('live console uses bounded plain text and preserves manual scroll',async()=>{
   const t=setup();t.get('job-log').textContent='x'.repeat(65530);t.get('job-log').scrollTop=5;t.get('job-log').scrollHeight=500;t.get('job-log').clientHeight=100;t.get('log-follow').checked=false;
@@ -719,4 +775,193 @@ test('stale planned raster response is discarded and finer h only warns',async()
   t.run("source={resolution:{path:'ref.tif',band:1,native_pixel_size:[30,30],native_units:'metre',source_crs:'EPSG:32649',analysis_crs:'EPSG:32649',representative_pixel_size_m:[30,30]}};renderResolution()");
   assert.equal(t.get('resolution-warning').children[0].children.length,3);
   assert.match(t.get('resolution-warning').children[0].children.map(row=>row.textContent).join(' '),/giữ nguyên độ phân giải gốc/);assert.equal(t.run('checkParameterFields()'),true);assert.equal(t.get('h-max').value,'1');
+});
+
+test('remesh draft edits and failed replacement retain the previously accepted mesh',async()=>{
+  const t=setup();
+  t.run(`const accepted={jobId:'accepted-mesh-123',path:'runs/accepted/cells.json',output:'runs/accepted',digest:'old-digest',cells:[{cell_id:'stable'}],display:{cell_count:1},hasMsh:false,qa:{mesh_quality:{}}};
+    meshSnapshot=accepted;jobId='failed-remesh-123';preserveAcceptedDuringRun=true;
+    $('h-max').value='125';$('mode').value='gmsh_generated';$('gmsh-sizing').value='uniform';
+    api=async path=>path.includes('/api/job?id=')?{status:'fail',stage:'meshing',result:{output:'runs/failed',error:'test failure'}}:{failed_stage:'meshing'};
+    syncJobLog=async()=>{};renderMonitor=()=>{};setBusy=value=>{busy=value;};stage=()=>{};restoreAcceptedMeshPresentation=()=>{jobId=meshSnapshot.jobId;};`);
+  t.run('invalidate()');
+  assert.equal(t.run("meshSnapshot.jobId"),'accepted-mesh-123');
+  await t.run("pollJob('failed-remesh-123')");
+  assert.equal(t.run("meshSnapshot.jobId"),'accepted-mesh-123');
+  assert.equal(t.run('jobId'),'accepted-mesh-123');
+  assert.equal(t.run('preserveAcceptedDuringRun'),false);
+});
+
+test('discarding a remesh draft restores the accepted result stage',()=>{
+  const t=setup();t.run("let restored=0;preserveAcceptedDuringRun=true;meshSnapshot={jobId:'accepted-mesh-123'};restoreAcceptedMeshPresentation=()=>{restored++;};stage=value=>{currentStage=value;};discardRemeshDraft()");
+  assert.equal(t.run('preserveAcceptedDuringRun'),false);assert.equal(t.run('restored'),1);assert.equal(t.run('currentStage'),4);
+});
+
+test('restoring a structured-grid remesh draft restores boundary policy and clears stale advanced settings',async()=>{
+  const t=setup();t.run("meshSnapshot={jobId:'mesh-structured-123',crs:'EPSG:32649'};gmshAdvancedEnabled=true;$('gmsh-advanced-enabled').checked=true;api=async()=>({config:{analysis_crs:'EPSG:32649',output_root:'runs',edge_subdivisions:16,resolution_reference:{path:'future.asc',band:2},cell_source:{kind:'structured_grid',extent:[10,20,510,520],cell_width_m:250,cell_height_m:125,boundary_policy:'clip',max_cells:987}}});mode=()=>{};showRemeshDraftButton=()=>{};stage=()=>{};");
+  await t.run('restoreRemeshDraft()');
+  assert.equal(t.get('policy').value,'clip');assert.equal(t.get('width').value,250);assert.equal(t.get('max-cells').value,987);assert.equal(t.get('subdivisions').value,16);assert.equal(t.get('planned-raster').value,'future.asc');assert.equal(t.run('gmshAdvancedEnabled'),false);assert.equal(t.get('gmsh-advanced-enabled').checked,false);
+});
+
+test('restoring a mesh-artifact remesh draft restores its source path and resets Gmsh controls',async()=>{
+  const t=setup();t.run("meshSnapshot={jobId:'mesh-artifact-123',crs:'EPSG:32649'};gmshAdvancedEnabled=true;$('gmsh-advanced-enabled').checked=true;$('gmsh-smoothing').value='8';api=async()=>({config:{cell_source:{kind:'mesh_artifact',path:'source/mesh.json',max_cells:321}}});mode=()=>{};showRemeshDraftButton=()=>{};stage=()=>{};");
+  await t.run('restoreRemeshDraft()');
+  assert.equal(t.get('mode').value,'mesh_artifact');assert.equal(t.get('mesh').value,'source/mesh.json');assert.equal(t.get('max-cells').value,321);assert.equal(t.run('gmshAdvancedEnabled'),false);assert.equal(t.get('gmsh-smoothing').value,'0');
+});
+
+test('batch partial and cancelled terminal states still request a preview',async()=>{
+  for(const state of ['partial','cancelled']){
+    const t=setup();t.run(`let previewState='';batchJobId='batch-${state}-123';renderBatchQueue=()=>{};api=async()=>({status:'${state}',stage:'${state}',result:{}});mountBatchTable=async(_id,status)=>{previewState=status;};`);
+    await t.run(`pollBatch('batch-${state}-123')`);
+    assert.equal(t.run('previewState'),state);assert.equal(t.run('batchCompletedJobId'),`batch-${state}-123`);
+  }
+});
+
+test('batch preview adapter preserves nested values, cell IDs, totals, and failed-feature metadata',async()=>{
+  const t=setup();t.get('batch-table').before=(...nodes)=>{t.context.batchMeta=nodes[0];};t.run(`batchQueue=[{name:'elevation'}];let previewParams,normalized;
+    MeshCherryAttributeTable={mount:(_container,options)=>{previewParams=options;const ready=options.fetchPage({page:1,pageSize:50,search:'',columns:['elevation'],signal:null}).then(value=>{normalized=value;return true;});return{ready,destroy(){}};}};
+    api=async(_path,body)=>({batch:{status:'partial',cell_count:1,features:[{name:'elevation',status:'no_data',error:'no valid pixels'}]},rows:[{cell_id:'0007',values:{elevation:0}}],total_cells:1,offset:0,feature_names:body.feature_names});`);
+  await t.run("mountBatchTable('batch-partial-123','partial')");
+  assert.equal(t.run("normalized.rows[0].cell_id"),'0007');assert.equal(t.run("normalized.rows[0].values.elevation"),0);assert.equal(t.run('normalized.totalRows'),1);
+  assert.match(t.context.batchMeta.children[0].textContent,/no_data: 1/);
+  assert.equal(t.context.batchMeta.children[1].children[1].children.length,1);
+  assert.equal(t.get('batch-export').disabled,false);
+});
+
+test('reload adopts only the matching batch job and never posts a duplicate start',()=>{
+  const t=setup();
+  t.storage.set('mesh-cherry-batch-recovery',JSON.stringify({version:1,state:'running',job_id:'batch-live-123',mesh_job_id:'mesh-live-123',features:[{name:'rain',path:'rain.tif',band:1,semantics:'intensive',value_units:'mm'}]}));
+  t.run("meshSnapshot={jobId:'mesh-live-123'};pollBatch=id=>{recoveredBatch=id;};restorePendingBatchForMesh('mesh-live-123')");
+  assert.equal(t.run('batchJobId'),'batch-live-123');assert.equal(t.run('batchQueue[0].name'),'rain');assert.equal(t.run('recoveredBatch'),'batch-live-123');
+  t.run("batchJobId=null;batchQueue=[];restorePendingBatchForMesh('another-mesh-123')");
+  assert.equal(t.run('batchJobId'),null);assert.equal(t.run('batchQueue.length'),0);assert.equal(t.get('batch-status').textContent.includes('một lưới khác'),true);
+});
+
+test('reload checks an uncertain batch request ID before replaying its frozen payload',async()=>{
+  const t=setup(),calls=[];
+  t.storage.set('mesh-cherry-batch-recovery',JSON.stringify({version:1,state:'starting',request_id:'stable-request-123',mesh_job_id:'mesh-live-123',features:[{name:'rain',path:'rain.tif',band:1,semantics:'intensive',value_units:'mm'}]}));
+  t.run("pollBatch=id=>{recoveredBatch=id;};api=async(path,body)=>{recoveryCalls.push({path,body});return {job_id:'batch-live-123',operation:'batch_extract',request_id:'stable-request-123'};};");
+  t.context.recoveryCalls=calls;t.run("restorePendingBatchForMesh('mesh-live-123')");for(let i=0;i<8;i++)await Promise.resolve();
+  assert.equal(calls.length,1);assert.match(calls[0].path,/\/api\/batch\/status\?/);assert.equal(t.run('batchJobId'),'batch-live-123');assert.equal(t.run('recoveredBatch'),'batch-live-123');
+});
+
+test('definitively rejected recovered batch request clears uncertainty and unlocks edits',async()=>{
+  const t=setup();t.storage.set('mesh-cherry-batch-recovery',JSON.stringify({version:1,state:'starting',request_id:'stable-request-400',mesh_job_id:'mesh-live-123',features:[{name:'rain',path:'rain.tif',band:1,semantics:'intensive',value_units:'mm'}]}));
+  t.run("meshSnapshot={jobId:'mesh-live-123'};api=async(path)=>{if(path.includes('/api/batch/status'))return{job_id:null};throw Object.assign(Error('invalid band'),{status:400});};restorePendingBatchForMesh('mesh-live-123')");
+  for(let i=0;i<8;i++)await Promise.resolve();
+  assert.equal(t.run('batchStartUncertain'),false);assert.equal(t.storage.has('mesh-cherry-batch-recovery'),false);assert.equal(t.get('batch-run').disabled,false);assert.match(t.get('batch-status').textContent,/HTTP 400/);
+});
+
+test('accepting a new mesh detaches preview/export metadata from the prior mesh batch',()=>{
+  const t=setup();t.run("let tableWasDestroyed=false;meshSnapshot={jobId:'mesh-A-123'};batchMeshId='mesh-A-123';batchCompletedJobId='batch-A-123';batchQueue=[{name:'rain',path:'rain.tif',band:1,semantics:'intensive',value_units:'mm'}];batchTable={destroy(){tableWasDestroyed=true;}};writeBatchRecovery({version:1,state:'completed',job_id:'batch-A-123',mesh_job_id:'mesh-A-123',features:batchQueue});$('batch-export').disabled=false;resetBatchResultsForMesh('mesh-B-123')");
+  assert.equal(t.run('tableWasDestroyed'),true);assert.equal(t.run('batchCompletedJobId'),null);assert.equal(t.run('batchMeshId'),null);assert.equal(t.get('batch-export').disabled,true);assert.equal(t.storage.has('mesh-cherry-batch-recovery'),false);assert.equal(t.run('batchQueue.length'),1);
+});
+
+test('uncertain batch recovery completes, exports against its mesh, then a new mesh clears old batch state',async()=>{
+  const t=setup();t.get('batch-format').value='wide_csv';
+  t.run(`meshSnapshot={jobId:'mesh-A-123',crs:'EPSG:32649'};batchQueue=[{name:'rain',path:'rain.tif',band:1,semantics:'intensive',value_units:'mm'}];batchStartUncertain=true;
+    let exportArgs=null;managedDownload=async args=>{exportArgs=args;return{phase:'saved'};};
+    api=async(path)=>path.includes('/api/batch/status')?{job_id:null}:path==='/api/batch/start'?{job_id:'batch-A-123',operation:'batch_extract',request_id:'request-A-123'}:path.includes('/api/job?id=batch-A-123')?{status:'pass',stage:'complete'}:path==='/api/batch/preview'?{batch:{status:'pass',cell_count:1,features:[{name:'rain',status:'pass'}]},rows:[{cell_id:'cell-1',values:{rain:0}}],total_cells:1,offset:0}:{};
+    MeshCherryAttributeTable={mount:()=>({ready:Promise.resolve(true),destroy(){}})};let pendingBatch={version:1,state:'starting',request_id:'request-A-123',mesh_job_id:'mesh-A-123',features:batchQueue.map(item=>({...item}))};`);
+  await t.run('recoverPendingBatchStart(pendingBatch)');for(let i=0;i<12;i++)await Promise.resolve();
+  assert.equal(t.run('batchJobId'),null);assert.equal(t.run('batchCompletedJobId'),'batch-A-123');assert.equal(t.run('batchMeshId'),'mesh-A-123');assert.equal(t.get('batch-export').disabled,false);
+  await t.run('exportBatch()');assert.equal(t.run('exportArgs.payload.job_id'),'batch-A-123');assert.equal(t.run('exportArgs.payload.format'),'wide_csv');
+  t.run("resetBatchResultsForMesh('mesh-B-123');meshSnapshot={jobId:'mesh-B-123'}");
+  assert.equal(t.run('batchCompletedJobId'),null);assert.equal(t.run('batchMeshId'),null);assert.equal(t.get('batch-export').disabled,true);assert.equal(t.storage.has('mesh-cherry-batch-recovery'),false);
+});
+
+test('batch terminal recovery preserves its mesh identity when the accepted mesh is not hydrated',async()=>{
+  const t=setup();t.run(`meshSnapshot=null;batchMeshId='mesh-A-123';batchJobId='batch-A-123';batchQueue=[{name:'rain',path:'rain.tif',band:1,semantics:'intensive',value_units:'mm'}];
+    writeBatchRecovery({version:1,state:'running',job_id:'batch-A-123',mesh_job_id:'mesh-A-123',features:batchQueue});api=async path=>path.includes('/api/job?id=')?{status:'pass',stage:'complete'}:{batch:{status:'pass',cell_count:0,features:[]},rows:[],total_cells:0,offset:0};MeshCherryAttributeTable={mount:()=>({ready:Promise.resolve(true),destroy(){}})};`);
+  await t.run("pollBatch('batch-A-123')");for(let i=0;i<8;i++)await Promise.resolve();
+  const recovery=JSON.parse(t.storage.get('mesh-cherry-batch-recovery'));assert.equal(recovery.state,'completed');assert.equal(recovery.mesh_job_id,'mesh-A-123');
+});
+
+test('start-another is blocked for running, uncertain, and recovery-blocked batches',()=>{
+  for(const state of ['running','uncertain','blocked']){
+    const t=setup();t.run(`meshSnapshot={jobId:'mesh-A-123'};batchCompletedJobId='old-preview';batchQueue=[];busy=false;batchJobId=${state==='running'?"'batch-A-123'":'null'};batchStartUncertain=${state==='uncertain'};batchRecoveryBlocked=${state==='blocked'};renderBatchQueue();startAnother()`);
+    assert.equal(t.get('start-another').disabled,true);assert.equal(t.run('meshSnapshot.jobId'),'mesh-A-123');assert.equal(t.run('batchCompletedJobId'),'old-preview');
+  }
+});
+
+test('explicit apply-units action fills only missing queued units and enables a valid batch',()=>{
+  const t=setup();t.run("meshSnapshot={jobId:'mesh-units-123'};batchQueue=[{name:'rain',path:'rain.tif',band:1,semantics:'intensive',value_units:''},{name:'temp',path:'temp.tif',band:1,semantics:'intensive',value_units:'°C'}];$('batch-units').value='mm';applyBatchUnitsToQueue()");
+  assert.equal(t.run('batchQueue[0].value_units'),'mm');assert.equal(t.run('batchQueue[1].value_units'),'°C');assert.equal(t.run('validBatchQueue()'),true);assert.equal(t.get('batch-run').disabled,false);assert.match(t.get('batch-readiness').textContent,/Đã áp dụng “mm” cho 1 dòng/);
+});
+
+test('apply-units helper itself cannot edit a queue while extraction is locked',()=>{
+  const t=setup();t.get('batch-readiness');t.run("batchQueue=[{name:'rain',path:'rain.tif',band:1,semantics:'intensive',value_units:''}];$('batch-units').value='mm';busy=true;applyBatchUnitsToQueue()");
+  assert.equal(t.run('batchQueue[0].value_units'),'');
+});
+
+test('batch readiness names the exact missing unit and explains why extraction is disabled',()=>{
+  const t=setup();t.get('batch-readiness');t.get('batch-apply-units');t.run("meshSnapshot={jobId:'mesh-units-123'};batchQueue=[{name:'rain',path:'rain.tif',band:1,semantics:'intensive',value_units:''}];updateBatchReadiness()");
+  assert.equal(t.get('batch-run').disabled,true);assert.match(t.get('batch-readiness').textContent,/Raster rain: nhập đơn vị/);assert.match(t.get('batch-readiness').textContent,/Áp dụng đơn vị cho hàng đợi/);
+  t.run("meshSnapshot=null;updateBatchReadiness()");assert.equal(t.get('batch-run').disabled,true);assert.match(t.get('batch-readiness').textContent,/tạo hoặc mở lưới/);
+});
+
+test('batch queue readiness and start validation share the backend name and reserved-field policy',()=>{
+  const t=setup();t.get('batch-readiness');
+  const feature=name=>({name,path:'raster.tif',band:1,semantics:'intensive',value_units:'mm'});
+  t.run(`batchQueue=[${JSON.stringify(feature('n'.repeat(200)))}];updateBatchReadiness()`);
+  assert.equal(t.run('validBatchQueue()'),true);assert.doesNotMatch(t.get('batch-readiness').textContent,/quá dài/);
+  t.run(`batchQueue=[${JSON.stringify(feature('n'.repeat(201)))}];updateBatchReadiness()`);
+  assert.equal(t.run('validBatchQueue()'),false);assert.match(t.get('batch-readiness').textContent,/tối đa 200 ký tự/);
+  for(const reserved of ['kind','area','area_m2','centroid_x','centroid_y','id','cell_id']){
+    t.run(`batchQueue=[${JSON.stringify(feature(reserved))}];updateBatchReadiness()`);
+    assert.equal(t.run('validBatchQueue()'),false,reserved);assert.match(t.get('batch-readiness').textContent,/dành riêng cho dữ liệu ô lưới/);
+  }
+  t.run(`batchQueue=[${JSON.stringify(feature('Rain'))},${JSON.stringify(feature(' rain '))}];updateBatchReadiness()`);
+  assert.equal(t.run('validBatchQueue()'),false);assert.match(t.get('batch-readiness').textContent,/bị trùng/);
+});
+
+test('batch mode hides but preserves the single-result preview, then restores it in single mode',()=>{
+  const t=setup();t.run("let singleTableDestroyed=false;attributeTable={destroy(){singleTableDestroyed=true;}};$('attribute-preview').hidden=false");
+  t.run("$('attribute-preview').hidden=false;setExtractMode('batch')");
+  assert.equal(t.get('attribute-preview').hidden,true);assert.notEqual(t.run('attributeTable'),null);assert.equal(t.run('singleTableDestroyed'),false);
+  t.run("setExtractMode('single')");
+  assert.equal(t.get('attribute-preview').hidden,false);assert.notEqual(t.run('attributeTable'),null);assert.equal(t.run('singleTableDestroyed'),false);
+});
+
+test('single mode keeps the attribute preview hidden until a result table exists',()=>{
+  const t=setup();t.run("attributeTable=null;$('attribute-preview').hidden=true;setExtractMode('single')");
+  assert.equal(t.get('attribute-preview').hidden,true);
+});
+
+test('log workspace exclusively shows panel 4 and preserves wizard stage across busy navigation',()=>{
+  const t=setup(),panels=[1,2,3,4].map(value=>t.get(`[data-panel="${value}"]`));
+  panels.forEach((panel,index)=>{panel.dataset.panel=String(index+1);panel.hidden=index!==0;});
+  t.context.document.querySelectorAll=selector=>selector==='[data-panel]'?panels:[];
+  t.run("showResultTab=tab=>{selectedResultTab=tab;};");
+  for(const stage of [1,2,3]){
+    t.run(`busy=true;currentStage=${stage};jobId=null;meshSnapshot=null;setWorkspace('log')`);
+    assert.deepEqual(panels.map(panel=>panel.hidden),[true,true,true,false]);
+    assert.equal(t.run('currentStage'),stage);assert.equal(t.run('selectedResultTab'),'log');
+    assert.equal(t.context.document.body.dataset.workspace,'log');
+    t.run("setWorkspace('roi')");assert.deepEqual(panels.map(panel=>panel.hidden),[false,true,true,true]);assert.equal(t.run('currentStage'),1);
+    t.run("setWorkspace('mesh')");assert.deepEqual(panels.map(panel=>panel.hidden),[true,false,true,true]);assert.equal(t.run('currentStage'),2);
+  }
+  t.run("busy=false;meshSnapshot={jobId:'mesh-live',display:{cell_count:1}};jobId='mesh-live';displayCellCount=()=>1;setWorkspace('log');setWorkspace('mesh')");
+  assert.deepEqual(panels.map(panel=>panel.hidden),[true,true,true,false]);assert.equal(t.run('currentStage'),4);
+});
+
+test('workspace navigation and explicit single-versus-batch mode expose the requested workspaces',()=>{
+  const t=setup();t.run("setWorkspace('extract');setExtractMode('batch')");
+  assert.equal(t.get('[data-panel="4"]').hidden,false);
+  assert.equal(t.context.document.body.dataset.workspace,'extract');assert.equal(t.context.document.body.dataset.extractMode,'batch');assert.equal(t.get('extract-options').hidden,true);assert.equal(t.get('batch-panel').hidden,false);
+  t.run("setExtractMode('single');setWorkspace('roi')");assert.equal(t.context.document.body.dataset.workspace,'roi');assert.equal(t.context.document.body.dataset.extractMode,'single');assert.equal(t.get('extract-options').hidden,false);assert.equal(t.get('batch-panel').hidden,true);
+});
+
+test('native save cancellation waits for backend terminal state and preserves a committed save',async()=>{
+  const t=setup(),calls=[];let abortListener;const signal={aborted:false,addEventListener(_type,listener){abortListener=listener;},removeEventListener(){}};
+  t.run("api=async path=>{nativeCalls.push(path);if(path==='/api/download/start')return{download_id:'download-123'};if(path==='/api/download/status?id=download-123')return{state:'saved',path:'D:/exports/table.zip',bytes_written:25,total_bytes:25};return{};};");
+  signal.aborted=true;t.context.nativeCalls=calls;t.context.nativeSignal=signal;const saving=t.run("nativeSave({kind:'batch',payload:{job_id:'batch-123',format:'wide_csv'},signal:nativeSignal})");const result=await saving;
+  assert.equal(result.state,'saved');assert.equal(result.path,'D:/exports/table.zip');assert.equal(calls.some(path=>path.startsWith('/api/download/cancel')),true);
+});
+
+test('native save with a lost status connection after cancel reports unknown, not cancelled',async()=>{
+  const t=setup();let abortListener;const signal={aborted:false,addEventListener(_type,listener){abortListener=listener;},removeEventListener(){}};
+  t.run("api=async path=>{if(path==='/api/download/start')return{download_id:'download-unknown'};if(path.startsWith('/api/download/status'))throw Error('offline');return{};};");
+  signal.aborted=true;t.context.nativeSignal=signal;const saving=t.run("nativeSave({kind:'batch',payload:{job_id:'batch-123',format:'wide_csv'},signal:nativeSignal})");const result=await saving;
+  assert.equal(result.state,'error');assert.match(result.error,/Chưa xác nhận trạng thái lưu/);
 });

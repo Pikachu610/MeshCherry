@@ -3,6 +3,36 @@ CONTROL_SHAPE=(33,33)
 PERCENTILE_POSITIONS=(25,95)
 RELIEF_GAMMA=2
 GMSH_ALGORITHM=5
+GMSH_ALGORITHMS_2D=(5,6)
+GMSH_ITERATION_LIMIT=10
+
+
+def advanced_meshing_options(source):
+    """Resolve a deliberately small, allowlisted set of 2D meshing controls."""
+    supplied=source.get('advanced') or {}
+    return dict(algorithm_2d=supplied.get('algorithm_2d',GMSH_ALGORITHM),
+        smoothing=supplied.get('smoothing',0),optimize_2d=supplied.get('optimize_2d',0))
+
+
+def validate_advanced_meshing(source):
+    """Reject unsupported profiles and malformed controls before launching Gmsh."""
+    if 'advanced' not in source:
+        return advanced_meshing_options(source)
+    if source.get('sizing') not in {'uniform','relief'}:
+        raise ValueError('Điều khiển Gmsh nâng cao chỉ hỗ trợ sizing uniform hoặc relief')
+    advanced=source['advanced']
+    if not isinstance(advanced,dict) or set(advanced)-{'algorithm_2d','smoothing','optimize_2d'}:
+        raise ValueError('Điều khiển Gmsh nâng cao có trường không được hỗ trợ')
+    values=advanced_meshing_options(source)
+    algorithm=values['algorithm_2d']
+    if (isinstance(algorithm,bool) or not isinstance(algorithm,int)
+            or algorithm not in GMSH_ALGORITHMS_2D):
+        raise ValueError('Gmsh 2D chỉ cho phép thuật toán 5 (Delaunay) hoặc 6 (Frontal-Delaunay)')
+    for key in ('smoothing','optimize_2d'):
+        value=values[key]
+        if isinstance(value,bool) or not isinstance(value,int) or not 0<=value<=GMSH_ITERATION_LIMIT:
+            raise ValueError(f'{key} phải là số nguyên từ 0 đến {GMSH_ITERATION_LIMIT}')
+    return values
 
 
 def raster_roi_type(path):
@@ -30,6 +60,8 @@ def request_summary(config, domain_evidence=None):
         summary.update(mode=source['sizing'],roi_type=roi_type,
             roi_source=source.get('boundary_path') or source.get('roi_raster_path') or source.get('extent'),
             requested_target_min_m=source['h_min_m'],requested_target_max_m=source['h_max_m'])
+        if source['sizing'] in {'uniform','relief'}:
+            summary['advanced_2d']=validate_advanced_meshing(source)
         evidence=domain_evidence or {}
         summary['source_crs_wkt']=evidence.get('source_crs_wkt',crs)
         from rasterio.crs import CRS

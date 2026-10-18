@@ -29,6 +29,7 @@ from .workload_limits import MAX_MESH_CELLS, MAX_MESH_BYTES
 from .presentation import INTERACTIVE_CELL_LIMIT, display_policy, artifact_view
 from ._version import __version__
 from .build_info import identity
+from .failure_details import describe_failure
 from .raster_source import RASTER_SUFFIXES, bundle_paths as raster_bundle_paths, open_raster, check_driver, authorized_reads
 
 ASSETS=Path(__file__).with_name('webui')
@@ -55,9 +56,11 @@ class WorkbenchServer(ThreadingHTTPServer):
         self.recent_preferences=Path(recent_preferences) if recent_preferences is not None else self.workspace/'.scratch/gis-mesh-workbench/recent-files.json'
         self.gmsh_preferences=Path(gmsh_preferences) if gmsh_preferences is not None else self.workspace/'.scratch/gis-mesh-workbench/gmsh.json'
         self.native_picker=None
+        self.native_save=None
         self.document_active=False
         self.picker_active=False
         self.selected_files=set()
+        self.protected_inputs=set()
         self.output_roots=tuple(dict.fromkeys([self.workspace]+[Path(p).resolve(strict=True) for p in allow_roots]))
         self.roots=tuple(dict.fromkeys([*self.output_roots,self.sample_root]))
         if any(not p.is_dir() for p in self.roots): raise ValueError('allowed roots must be directories')
@@ -68,6 +71,8 @@ class WorkbenchServer(ThreadingHTTPServer):
         self.output_root.mkdir(parents=True,exist_ok=True)
         self.validated={}; self.jobs={}; self.controls={}; self.current_preflight=None
         self.preflight_generation=0; self.preflight_inflight=set()
+        from .download_manager import DownloadManager
+        self.downloads=DownloadManager(self)
         super().__init__(('127.0.0.1',port),Handler)
         self.host=f'127.0.0.1:{self.server_port}'; self.origin='http://'+self.host
 
@@ -124,7 +129,7 @@ class WorkbenchServer(ThreadingHTTPServer):
         return resolved
 
     def choose_native(self,data):
-        if not isinstance(data,dict) or set(data)!={'kind'} or data['kind'] not in {'raster','mesh','gmsh','output','boundary'}:
+        if not isinstance(data,dict) or set(data)!={'kind'} or data['kind'] not in {'raster','raster_many','mesh','gmsh','output','boundary'}:
             raise ValueError('Unsupported picker kind')
         with self.lock:
             if self.native_picker is None: raise ValueError('Hộp chọn Windows chỉ có trong bản desktop')
@@ -134,6 +139,19 @@ class WorkbenchServer(ThreadingHTTPServer):
         try:
             paths=self.native_picker(data['kind'])
             if not paths: return dict(cancelled=True)
+            if data['kind']=='raster_many':
+                if not isinstance(paths,(tuple,list)) or not 1<=len(paths)<=500:
+                    raise ValueError('Chọn từ 1 đến 500 raster')
+                selected=[]; grants=set()
+                for candidate in paths:
+                    candidate=Path(candidate)
+                    if not candidate.is_absolute():raise ValueError('Đường dẫn raster phải tuyệt đối')
+                    candidate=candidate.resolve(strict=True)
+                    if not candidate.is_file() or candidate.suffix.lower() not in RASTER_SUFFIXES:
+                        raise ValueError('Chọn raster .tif, .tiff hoặc .asc')
+                    selected.append(candidate);grants.update(raster_bundle_paths(candidate))
+                with self.lock:self.selected_files.update(grants)
+                return dict(cancelled=False,paths=[str(p) for p in dict.fromkeys(selected)])
             if not isinstance(paths,(tuple,list)) or len(paths)!=1: raise ValueError('Chọn đúng một tệp hoặc thư mục')
             path=Path(paths[0])
             if not path.is_absolute(): raise ValueError('Native picker must return an absolute path')
@@ -162,6 +180,19 @@ class WorkbenchServer(ThreadingHTTPServer):
     def remember_input(self,kind,path):
         if self.sample_root==path or self.sample_root in path.parents: return
         remember(self.recent_preferences,kind,path)
+
+    def protect_config_inputs(self,config):
+        """Record known sources for overwrite protection without granting access."""
+        source=config.get('cell_source') or {}
+        references=[config.get('raster_path'),(config.get('resolution_reference') or {}).get('path')]
+        references.extend(source.get(key) for key in ('path','boundary_path','roi_raster_path','dem_raster_path','executable'))
+        protected=set()
+        for raw in references:
+            if not raw:continue
+            path=Path(raw).resolve(strict=False);protected.add(path)
+            if path.suffix.lower()=='.shp':protected.update(bundle_paths(path))
+            elif path.suffix.lower() in RASTER_SUFFIXES:protected.update(raster_bundle_paths(path))
+        with self.lock:self.protected_inputs.update(protected)
 
     def recent_action(self,data):
         with self.lock:
@@ -258,6 +289,7 @@ class WorkbenchServer(ThreadingHTTPServer):
             # outside the shared job lock while the in-flight guard prevents
             # pickers and job starts from changing the validated inputs.
             config=self.normalize_form(data)
+            self.protect_config_inputs(config)
             ident=uuid.uuid4().hex; path=self.session_dir/(ident+'.json')
             write_json(path,config)
             effective=effective_config(path)
@@ -324,6 +356,10 @@ class WorkbenchServer(ThreadingHTTPServer):
                     # The shared lock orders accepted Stop against terminal success.
                     if control.cancel.is_set() and not control.committed:
                         result.update(status='cancelled',error='Đã dừng theo yêu cầu')
+                    if result['status'] == 'fail':
+                        result['failure'] = describe_failure(result.get('error'))
+                    elif result['status'] == 'cancelled':
+                        result.pop('failure', None)
                     control.finished=control.clock()
                     self.jobs[job_id].update(status=result['status'],stage='done' if result['status']=='pass' else result['status'],result=result)
             threading.Thread(target=worker,daemon=True).start()
@@ -500,6 +536,26 @@ class Handler(BaseHTTPRequestHandler):
         if api and not secrets.compare_digest(self.headers.get('X-Workbench-Token','').encode('utf-8'),self.server.token.encode('utf-8')):
             raise AccessError('Token missing or invalid')
 
+    def stream_file(self,path,content_type='application/octet-stream',filename=None):
+        """Stream only a previously authorized file; never buffer a large export."""
+        with Path(path).open('rb') as source:
+            size=os.fstat(source.fileno()).st_size
+            self.send_response(200)
+            self.send_header('Content-Type',content_type)
+            self.send_header('Content-Length',str(size))
+            self.send_header('Cache-Control','no-store')
+            self.send_header('X-Content-Type-Options','nosniff')
+            self.send_header('Referrer-Policy','no-referrer')
+            if filename:
+                safe=re.sub(r'[^A-Za-z0-9._-]','_',filename)[:180]
+                self.send_header('Content-Disposition','attachment; filename="'+safe+'"')
+            self.end_headers()
+            remaining=size
+            while remaining:
+                block=source.read(min(1024*1024,remaining))
+                if not block:break
+                self.wfile.write(block);remaining-=len(block)
+
     def do_GET(self):
         try:
             parsed=urlsplit(self.path); path=parsed.path
@@ -508,10 +564,10 @@ class Handler(BaseHTTPRequestHandler):
                      for weight in ('Regular', 'Medium', 'SemiBold', 'Bold')}
             if path in fonts:
                 return self.respond((ASSETS/'fonts'/fonts[path]).read_bytes(), content_type='font/ttf')
-            if path in {'/','/app.js','/coach.js','/style.css','/wizard.css','/icon.png','/favicon.ico'}:
+            if path in {'/','/app.js','/coach.js','/attribute_table.js','/downloads.js','/attribute_table.css','/workspace_layout.css','/style.css','/wizard.css','/icon.png','/favicon.ico'}:
                 name={'/':'index.html','/icon.png':'meshcherry-icon-v1.png',
                       '/favicon.ico':'meshcherry-icon-v1.ico'}.get(path,path[1:])
-                mime={'index.html':'text/html','app.js':'text/javascript','coach.js':'text/javascript','style.css':'text/css','wizard.css':'text/css',
+                mime={'index.html':'text/html','app.js':'text/javascript','coach.js':'text/javascript','attribute_table.js':'text/javascript','downloads.js':'text/javascript','attribute_table.css':'text/css','workspace_layout.css':'text/css','style.css':'text/css','wizard.css':'text/css',
                       'meshcherry-icon-v1.png':'image/png','meshcherry-icon-v1.ico':'image/vnd.microsoft.icon'}[name]
                 body=(ASSETS/name).read_bytes()
                 if name=='index.html':body=body.replace(b'{{APP_VERSION}}',__version__.encode('ascii'))
@@ -523,7 +579,7 @@ class Handler(BaseHTTPRequestHandler):
                     meshing_parameters=meshing_policy(),application_build=identity(),
                     mesh_limits=dict(max_cells=MAX_MESH_CELLS,interactive_cells=INTERACTIVE_CELL_LIMIT),
                     has_startup_project=self.server.has_startup_project,
-                    gmsh_path=gmsh_path,gmsh_saved=gmsh_saved,native_picker=self.server.native_picker is not None,
+                    gmsh_path=gmsh_path,gmsh_saved=gmsh_saved,native_picker=self.server.native_picker is not None,native_save=self.server.native_save is not None,
                     tutorial_seen=tutorial_seen(self.server.tutorial_preferences),
                     sample_raster=str(self.server.sample_root/'sample_10_30.tif'),
                     sample_mesh=str(self.server.sample_root/'two_triangles.json')))
@@ -534,6 +590,18 @@ class Handler(BaseHTTPRequestHandler):
                 from .research_reference import sf1_reference
                 return self.respond(sf1_reference())
             query=parse_qs(parsed.query)
+            if path=='/api/batch/status':
+                request_id=query.get('request_id',[''])[0]
+                if not re.fullmatch(r'[A-Za-z0-9_-]{8,80}',request_id):
+                    raise ValueError('Invalid batch request ID')
+                with self.server.lock:
+                    found=next(((ident,job) for ident,job in self.server.jobs.items()
+                                if job.get('operation')=='batch_extract' and job.get('request_id')==request_id),None)
+                    result=(dict(job_id=found[0],operation='batch_extract',request_id=request_id,
+                                 status=found[1]['status']) if found else dict(job_id=None))
+                return self.respond(result)
+            if path=='/api/download/status':
+                return self.respond(self.server.downloads.status(query.get('id',[''])[0]))
             if path=='/api/job-log':
                 ident=query.get('id',[''])[0]
                 with self.server.lock:
@@ -569,12 +637,22 @@ class Handler(BaseHTTPRequestHandler):
                                  status=found[1]['status']) if found else dict(job_id=None))
                 return self.respond(result)
             if path=='/api/job': return self.respond(self.server.job(query.get('id',[''])[0]))
+            if path=='/api/mesh-config':
+                from .document_api import _accepted
+                ident=query.get('id',[''])[0]
+                _accepted(self.server,ident)
+                output=Path(self.server.job(ident)['result']['output'])
+                config_path=output/'config.json'
+                if config_path.is_file():config=_json(config_path)
+                else:config=_json(output/'project-history.json').get('config')
+                if not config:raise ValueError('Kết quả này chưa có cấu hình để chia lại lưới')
+                return self.respond(dict(config=config))
             if path=='/api/artifact':
                 name=query.get('name',[''])[0]; artifact=self.server.artifact(query.get('id',[''])[0],name)
                 if query.get('view')==['1'] and query.get('download')!=['1'] and name in {'cells','attributes','qa'}:
                     return self.respond(artifact_view(name,_json(artifact)))
                 mime='image/png' if name=='preview' else 'text/csv' if name=='csv' else 'text/plain' if name in {'msh','gmsh_log'} else 'application/json'
-                return self.respond(artifact.read_bytes(),content_type=mime,
+                return self.stream_file(artifact,content_type=mime,
                     filename=Path(ARTIFACTS[name]).name if query.get('download')==['1'] else None)
             self.respond(dict(error='Not found'),404)
         except AccessError as error: self.respond(dict(error=str(error)),403)
@@ -617,9 +695,26 @@ class Handler(BaseHTTPRequestHandler):
             if self.headers.get_content_type()!='application/json':
                 return self.respond(dict(error='application/json required'),415)
             count=int(self.headers.get('Content-Length','0'))
-            if not 0<count<=65536: return self.respond(dict(error='Request body size limit'),413)
+            ceiling=1048576 if path=='/api/batch/start' else 65536
+            if not 0<count<=ceiling: return self.respond(dict(error='Request body size limit'),413)
             raw=self.rfile.read(count); self.body_consumed=True
             data=json.loads(raw,parse_constant=lambda value: (_ for _ in ()).throw(ValueError('nonfinite JSON')))
+            if path=='/api/batch/start':
+                from .batch_api import start_batch
+                return self.respond(start_batch(self.server,data))
+            if path=='/api/batch/preview':
+                from .batch_api import batch_preview
+                return self.respond(batch_preview(self.server,data))
+            if path=='/api/batch/export':
+                from .batch_api import batch_export_file
+                from .document_api import document_action
+                with document_action(self.server):artifact=batch_export_file(self.server,data)
+                try:return self.stream_file(artifact['path'],artifact['mime'],artifact['filename'])
+                finally:Path(artifact['path']).unlink(missing_ok=True)
+            if path=='/api/download/start':return self.respond(self.server.downloads.start(data))
+            if path=='/api/download/cancel':
+                if not isinstance(data,dict) or set(data)!={'id'}:raise ValueError('Download cancellation requires id')
+                return self.respond(self.server.downloads.cancel(data['id']))
             if path=='/api/project/save':
                 from .document_api import save_project
                 return self.respond(save_project(self.server,data),content_type='application/zip',filename='MeshCherry.mcy')
