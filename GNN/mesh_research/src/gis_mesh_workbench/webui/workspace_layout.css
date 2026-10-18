@@ -293,6 +293,20 @@ body[data-workspace="log"] #job-log {
   min-width: 0;
 }
 
+#comparison-panel > .field-help[role="status"] {
+  margin-block: 8px 14px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--cherry, #a62645);
+  border-radius: 8px;
+  background: #fff7f8;
+}
+
+#comparison-panel #comparison-target-size-wrap,
+#comparison-panel #comparison-source-size-wrap,
+#comparison-panel #comparison-band-wrap {
+  min-width: 0;
+}
+
 @media (max-width: 1000px) {
   body[data-workspace="mesh"] #form .wizard-panel[data-panel="2"] {
     grid-template-columns: repeat(2, minmax(0, 1fr));

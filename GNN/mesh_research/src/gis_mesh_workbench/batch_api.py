@@ -21,6 +21,8 @@ from .adapters import _json
 from .batch_extraction import (export_json, export_long_csv, export_wide_csv,
                                inspect_batch, preview_batch)
 from .batch_extraction import MAX_EXPORT_BYTES, MAX_FEATURES
+from .extraction_draft import (MAX_DRAFT_BYTES, canonical_wire_state, freeze_draft,
+                               prepare_draft, preview_draft)
 from .document_api import _accepted
 from .extraction import Cell, _digest
 from .job_control import Cancelled, JobControl, checkpoint, job_scope
@@ -46,7 +48,8 @@ def _request_fingerprint(data):
     """Fingerprint the exact JSON request independently of current file state."""
     try:
         payload = json.dumps({'mesh_job_id': data['mesh_job_id'],
-                              'features': data['features']},
+                              'features': data['features'], 'draft': data.get('draft'),
+                              'plan_hash': data.get('plan_hash')},
                              sort_keys=True, ensure_ascii=False, allow_nan=False,
                              separators=(',', ':'))
     except (TypeError, ValueError, KeyError) as error:
@@ -55,7 +58,7 @@ def _request_fingerprint(data):
 
 
 def _validate_data(server, data):
-    if not isinstance(data, dict) or set(data) - {'mesh_job_id', 'features', 'request_id'} or \
+    if not isinstance(data, dict) or set(data) - {'mesh_job_id', 'features', 'request_id', 'draft', 'plan_hash'} or \
             not {'mesh_job_id', 'features'} <= set(data):
         raise ValueError('Batch requires mesh_job_id and feature specs')
     mesh_id = data['mesh_job_id']
@@ -63,7 +66,8 @@ def _validate_data(server, data):
     _request_id(data.get('request_id'))
     if not isinstance(mesh_id, str) or not mesh_id:
         raise ValueError('Accepted mesh job ID required')
-    if not isinstance(specs, list) or not 1 <= len(specs) <= MAX_FEATURES:
+    has_draft = 'draft' in data
+    if not isinstance(specs, list) or len(specs) > MAX_FEATURES or (not has_draft and not specs):
         raise ValueError('Batch must contain from 1 to 500 feature specs')
     manifest, cells_data = _accepted(server, mesh_id)
     crs = cells_data.get('crs_wkt')
@@ -83,9 +87,26 @@ def _validate_data(server, data):
     analysis_crs = metric_crs(crs).to_wkt()
     if not isinstance(specs, list):
         raise ValueError('features must be a list')
+    draft = None
+    if has_draft:
+        draft_raw = data['draft']
+        try:
+            draft_size = len(json.dumps(draft_raw, ensure_ascii=False, allow_nan=False,
+                                        separators=(',', ':')).encode('utf-8'))
+        except (TypeError, ValueError) as error:
+            raise ValueError('Invalid draft payload') from error
+        if draft_size > MAX_DRAFT_BYTES:
+            raise ValueError('Draft request exceeds 1 MiB')
+        draft = prepare_draft(mesh_id, digest, cells, specs, draft_raw)
+        source_names = {column['source_name'] for column in draft['columns']
+                        if column['type'] == 'raster'}
+        specs_to_resolve = [spec for spec in specs if isinstance(spec, dict) and
+                            spec.get('name') in source_names]
+    else:
+        specs_to_resolve = specs
     normalized = []
     protected_inputs = set()
-    for spec in specs:
+    for spec in specs_to_resolve:
         if not isinstance(spec, dict) or set(spec) != _FEATURE_KEYS:
             raise ValueError('Each feature requires name, path, band, semantics, and value_units')
         if not isinstance(spec['path'], str):
@@ -98,14 +119,57 @@ def _validate_data(server, data):
             protected_inputs.add(Path(source).resolve(strict=False))
         normalized.append({**spec, 'path': str(raster)})
     retained = {str(cells_path): _digest(cells_path), str(manifest_path): _digest(manifest_path)}
+    frozen = None
+    if has_draft:
+        # Only retained raster columns need path grants. Rebuild the plan with
+        # the authorized paths before freezing it; the source names stay stable.
+        draft = prepare_draft(mesh_id, digest, cells, normalized, draft_raw)
+        frozen = freeze_draft(draft, mesh_job_id=mesh_id,
+                              geometry_digest=digest, cells=cells)
+        claimed_hash = data.get('plan_hash')
+        if claimed_hash is not None and claimed_hash != frozen['plan_digest']:
+            raise ValueError('Draft plan hash does not match the canonical draft')
+        normalized = frozen['features']
+        extraction_cells = frozen['cells']
+        extraction_digest = geometry_digest(extraction_cells, crs)
+        draft_metadata = dict(parent_geometry_digest=digest,
+            plan_hash=frozen['plan_digest'], columns=frozen['columns'],
+            overrides=frozen['overrides'], manual_rows=frozen['manual_rows'],
+            excluded_cell_ids=frozen['excluded_cell_ids'])
+    else:
+        extraction_cells = cells
+        extraction_digest = digest
+        draft_metadata = None
     return dict(mesh_job_id=mesh_id, cells=cells, cell_crs=crs,
                 analysis_crs=analysis_crs, geometry_digest=digest,
+                extraction_cells=extraction_cells, extraction_geometry_digest=extraction_digest,
+                draft=draft, frozen_draft=frozen, draft_metadata=draft_metadata,
                 retained=retained, protected_inputs=protected_inputs, features=normalized)
+
+
+def draft_preview(server, data):
+    """Build the accepted-mesh table draft without opening any raster values."""
+    if not isinstance(data, dict) or set(data) - {
+            'mesh_job_id', 'features', 'draft', 'offset', 'limit', 'visible_columns'}:
+        raise ValueError('Unsupported extraction draft preview fields')
+    draft_request = {key: data[key] for key in ('mesh_job_id', 'features') if key in data}
+    draft_request['draft'] = data.get('draft')
+    prepared = _validate_data(server, draft_request)
+    page = preview_draft(prepared['draft'], offset=data.get('offset', 0),
+                         limit=data.get('limit', 100),
+                         visible_columns=data.get('visible_columns'))
+    return dict(draft=canonical_wire_state(prepared['draft']),
+        plan_hash=prepared['draft']['plan_digest'],
+        geometry_digest=prepared['geometry_digest'],
+        columns=page['columns'], rows=page['rows'], total_rows=page['total_rows'],
+        total_cells=page['total_cells'], accepted_cells=page['accepted_cells'],
+        selected_cells=len(prepared['extraction_cells']),
+        offset=page['offset'], limit=page['limit'])
 
 
 def start_batch(server, data):
     """Queue a sequential batch against a successful accepted mesh job."""
-    if not isinstance(data, dict) or set(data) - {'mesh_job_id', 'features', 'request_id'} or \
+    if not isinstance(data, dict) or set(data) - {'mesh_job_id', 'features', 'request_id', 'draft', 'plan_hash'} or \
             not {'mesh_job_id', 'features'} <= set(data):
         raise ValueError('Batch requires mesh_job_id and feature specs')
     request_id = data.get('request_id')
@@ -179,9 +243,11 @@ def start_batch(server, data):
                         control.log(detail)
 
                 from .batch_extraction import run_batch
-                batch = run_batch(database, prepared['cells'], prepared['features'],
+                batch = run_batch(database, prepared['extraction_cells'], prepared['features'],
                     cell_crs=prepared['cell_crs'], analysis_crs=prepared['analysis_crs'],
-                    accepted_geometry_digest=prepared['geometry_digest'], progress=progress)
+                    accepted_geometry_digest=prepared['extraction_geometry_digest'], progress=progress,
+                    draft_plan=prepared['draft_metadata'],
+                    allow_empty_features=prepared['draft'] is not None)
                 if not accepted_mesh_unchanged():
                     raise ValueError('Accepted mesh changed during batch extraction')
                 result = dict(status='pass' if batch['status'] == 'complete' else 'partial',
@@ -221,7 +287,7 @@ def start_batch(server, data):
 
 def _batch_database(server, data, *, require_terminal=False):
     if not isinstance(data, dict) or set(data) - {'job_id', 'offset', 'limit',
-            'feature_names', 'cell_id', 'cell_id_mode', 'format'} or \
+            'feature_names', 'visible_columns', 'cell_id', 'cell_id_mode', 'format'} or \
             not isinstance(data.get('job_id'), str):
         raise ValueError('Batch action requires an owned job_id')
     job_id = data['job_id']
@@ -246,14 +312,16 @@ def _batch_database(server, data, *, require_terminal=False):
 
 
 def batch_preview(server, data):
-    allowed = {'job_id', 'offset', 'limit', 'feature_names', 'cell_id', 'cell_id_mode'}
+    allowed = {'job_id', 'offset', 'limit', 'feature_names', 'visible_columns',
+               'cell_id', 'cell_id_mode'}
     if not isinstance(data, dict) or set(data) - allowed:
         raise ValueError('Unsupported batch preview fields')
     job, database = _batch_database(server, data)
     try:
         page = preview_batch(database, offset=data.get('offset', 0), limit=data.get('limit', 100),
             feature_names=data.get('feature_names'), cell_id=data.get('cell_id'),
-            cell_id_mode=data.get('cell_id_mode', 'exact'))
+            cell_id_mode=data.get('cell_id_mode', 'exact'),
+            visible_columns=data.get('visible_columns'))
     except (sqlite3.OperationalError, ValueError) as error:
         if not database.is_file() or 'locked' in str(error).lower() or 'not found' in str(error).lower():
             raise ValueError('Batch preview is not ready; retry shortly') from error

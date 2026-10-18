@@ -33,7 +33,7 @@ def self_test(report, gmsh_path=None, boundary_path=None):
         try:
             conn = http.client.HTTPConnection(*server.server_address, timeout=10)
             for asset in ('/', '/coach.js', '/app.js', '/wizard.css', '/attribute_table.js',
-                          '/downloads.js','/attribute_table.css','/workspace_layout.css','/fonts/BeVietnamPro-Regular.ttf'):
+                          '/downloads.js','/extraction_draft.js','/extraction_draft.css','/attribute_table.css','/workspace_layout.css','/fonts/BeVietnamPro-Regular.ttf'):
                 conn.request('GET', asset, headers={'Host': server.host})
                 response = conn.getresponse()
                 body = response.read()
@@ -82,6 +82,33 @@ def self_test(report, gmsh_path=None, boundary_path=None):
         export_wide_csv(database,Path(directory)/'batch.csv')
         export_json(database,Path(directory)/'batch.json')
         checks['batch_extraction']=dict(status='pass',features=2,cells=2,preview=True,exports=['csv','json'])
+        from gis_mesh_workbench.extraction_draft import prepare_draft, canonical_wire_state, preview_draft
+        digest=geometry_digest(triangle.cells,'EPSG:32649')
+        draft=prepare_draft('frozen-mesh',digest,triangle.cells,features,None)
+        preview=preview_draft(draft,limit=1)
+        if preview['rows'][0]['values']['raster_0']!={'state':'not_computed'}:
+            raise RuntimeError('Frozen draft preview fabricated raster values')
+        wire=canonical_wire_state(draft)
+        wire['columns'][0]['name']='Renamed'
+        wire['columns'].append(dict(id='note',type='manual',name='Note',value_type='text'))
+        wire['rows']=[dict(cell_id=triangle.cells[0].cell_id,values={'note':'reviewed'})]
+        wire['manual_rows']=[dict(row_id='annotation',values={'note':'manual'})]
+        prepared=prepare_draft('frozen-mesh',digest,triangle.cells,features,wire)
+        plan=dict(parent_geometry_digest=digest,plan_hash=prepared['plan_digest'],
+                  columns=prepared['columns'],overrides=prepared['overrides'],
+                  manual_rows=prepared['manual_rows'],excluded_cell_ids=[])
+        draft_db=Path(directory)/'draft.sqlite'
+        run_batch(draft_db,triangle.cells,prepared['features'],cell_crs='EPSG:32649',
+                  analysis_crs='EPSG:32649',accepted_geometry_digest=digest,draft_plan=plan)
+        result=preview_batch(draft_db,limit=10)
+        if result['rows'][0]['values']['raster_0']['state']!='computed':
+            raise RuntimeError('Frozen draft column identity changed after extraction')
+        from gis_mesh_workbench.batch_extraction import export_long_csv
+        export_wide_csv(draft_db,Path(directory)/'draft-wide.csv')
+        export_long_csv(draft_db,Path(directory)/'draft-long.csv')
+        export_json(draft_db,Path(directory)/'draft.json')
+        checks['extraction_draft']=dict(status='pass',previews=True,manual_rows=True,
+                                        renamed_columns=True,exports=['wide_csv','long_csv','json'])
     if 'Bé' in (ASSETS/'index.html').read_text(encoding='utf-8'):
         raise RuntimeError('Old UI wording remains')
     checks['pythonnet_import'] = 'pass'

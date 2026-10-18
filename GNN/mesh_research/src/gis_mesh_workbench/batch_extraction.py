@@ -56,6 +56,7 @@ CREATE TABLE feature_cells (
   cell_id TEXT NOT NULL REFERENCES cells(cell_id), value_json TEXT,
   PRIMARY KEY(name, cell_id)
 );
+CREATE TABLE draft_plan (plan_json TEXT NOT NULL);
 CREATE INDEX feature_cells_cell ON feature_cells(cell_id, name);
 """
 
@@ -73,8 +74,9 @@ def _load(db_path):
     return db
 
 
-def _validate_specs(specs):
-    if not isinstance(specs, (list, tuple)) or not 1 <= len(specs) <= MAX_FEATURES:
+def _validate_specs(specs, *, allow_empty=False):
+    if not isinstance(specs, (list, tuple)) or len(specs) > MAX_FEATURES or \
+            (not allow_empty and not specs):
         raise ValueError('batch must contain from 1 to 500 feature specs')
     names = set()
     cleaned = []
@@ -111,7 +113,8 @@ def _notify(callback, **event):
 
 def run_batch(db_path, cells, specs, *, cell_crs, analysis_crs,
               accepted_geometry_digest, hard_limits=None,
-              max_aggregate_candidate_pairs=MAX_AGGREGATE_PAIRS, progress=None):
+              max_aggregate_candidate_pairs=MAX_AGGREGATE_PAIRS, progress=None,
+              draft_plan=None, allow_empty_features=False):
     """Create a fresh durable batch; each feature commits independently.
 
     `Cancelled` is re-raised only after active and queued statuses are persisted.
@@ -128,7 +131,7 @@ def run_batch(db_path, cells, specs, *, cell_crs, analysis_crs,
         raise ValueError('aggregate candidate-pair limit cannot exceed hard ceiling')
     if cell_crs is None or CRS.from_user_input(cell_crs) != CRS.from_user_input(analysis_crs):
         raise ValueError('cells must explicitly use analysis CRS; relabeling forbidden')
-    specs = _validate_specs(specs)
+    specs = _validate_specs(specs, allow_empty=allow_empty_features)
     identity = geometry_digest(cells, cell_crs)
     if identity != accepted_geometry_digest:
         raise ValueError('accepted geometry digest mismatch')
@@ -152,6 +155,8 @@ def run_batch(db_path, cells, specs, *, cell_crs, analysis_crs,
                    (batch_id, identity, str(cell_crs), str(analysis_crs), 'running',
                     __import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(),
                     len(specs), len(cells)))
+        if draft_plan is not None:
+            db.execute('INSERT INTO draft_plan(plan_json) VALUES(?)', (_json(draft_plan),))
         for position, spec in enumerate(specs):
             db.execute('INSERT INTO features(position,name,path,band,semantics,value_units,status) '
                        'VALUES(?,?,?,?,?,?,?)',
@@ -250,23 +255,42 @@ def inspect_batch(db_path):
             feature['provenance'] = json.loads(row['provenance_json']) if row['provenance_json'] else None
             feature['quality'] = json.loads(row['quality_json']) if row['quality_json'] else None
             features.append(feature)
-        return dict(batch_id=batch['id'], geometry_digest=batch['geometry_digest'],
+        result = dict(batch_id=batch['id'], geometry_digest=batch['geometry_digest'],
                     cell_crs=batch['cell_crs'], analysis_crs=batch['analysis_crs'],
                     status=batch['status'], feature_count=batch['feature_count'],
                     cell_count=batch['cell_count'],
                     aggregate_candidate_pairs=batch['aggregate_candidate_pairs'],
                     features=features)
+        draft_row = db.execute('SELECT plan_json FROM draft_plan LIMIT 1').fetchone()
+        if draft_row:
+            result['draft'] = json.loads(draft_row[0])
+        return result
 
 
 def preview_batch(db_path, *, offset=0, limit=100, feature_names=None,
-                  cell_id=None, cell_id_mode='exact'):
+                  cell_id=None, cell_id_mode='exact', visible_columns=None):
     if type(offset) is not int or offset < 0:
         raise ValueError('offset must be a nonnegative integer')
     if type(limit) is not int or not 1 <= limit <= MAX_PREVIEW_LIMIT:
         raise ValueError('preview limit must be from 1 to 200')
     with closing(_load(db_path)) as db:
+        plan = _draft_plan(db)
         names = [row[0] for row in db.execute('SELECT name FROM features ORDER BY position')]
-        if feature_names is not None:
+        visible_draft = None
+        if plan:
+            by_id = {column['id']: column for column in plan['columns']}
+            if visible_columns is not None:
+                if not isinstance(visible_columns, (list, tuple)) or len(visible_columns) > MAX_PREVIEW_COLUMNS:
+                    raise ValueError('at most 20 preview columns may be selected')
+                if len(set(visible_columns)) != len(visible_columns) or set(visible_columns) - set(by_id):
+                    raise ValueError('unknown or duplicate preview column')
+                visible_draft = [by_id[ident] for ident in visible_columns]
+            else:
+                visible_draft = plan['columns'][:MAX_PREVIEW_COLUMNS]
+            names = [column['name'] for column in visible_draft if column['type'] == 'raster']
+        elif visible_columns is not None:
+            raise ValueError('visible_columns requires an extraction draft')
+        elif feature_names is not None:
             if not isinstance(feature_names, (list, tuple)) or len(feature_names) > MAX_PREVIEW_COLUMNS:
                 raise ValueError('at most 20 preview feature columns may be selected')
             if len(set(feature_names)) != len(feature_names) or set(feature_names) - set(names):
@@ -292,11 +316,51 @@ def preview_batch(db_path, *, offset=0, limit=100, feature_names=None,
                 f'WHERE cell_id IN ({cell_marks}) AND name IN ({feature_marks})')
             for value_row in db.execute(values_query,
                     (*[cell['cell_id'] for cell in cells_page], *names)):
-                page_values[value_row['cell_id']][value_row['name']] = json.loads(value_row['value_json']).get('value')
+                page_values[value_row['cell_id']][value_row['name']] = json.loads(value_row['value_json'])
         rows = [dict(cell_id=cell['cell_id'], kind=cell['kind'], area_m2=cell['area_m2'],
                      centroid_x=cell['centroid_x'], centroid_y=cell['centroid_y'],
-                     values={name: page_values[cell['cell_id']].get(name) for name in names})
-                for cell in cells_page]
+                     values={name: (page_values[cell['cell_id']].get(name) or {}).get('value')
+                             for name in names}) for cell in cells_page]
+        draft_plan = plan
+        if draft_plan:
+            feature_statuses = dict(db.execute('SELECT name,status FROM features'))
+            for row in rows:
+                row['row_kind'] = 'cell'
+                row['included'] = True
+                rendered = {}
+                raw_values = page_values[row['cell_id']]
+                for column in visible_draft:
+                    if column['type'] == 'manual':
+                        rendered[column['id']] = draft_plan['overrides'].get(
+                            row['cell_id'], {}).get(column['id'])
+                        continue
+                    status = feature_statuses.get(column['name'])
+                    record = raw_values.get(column['name'])
+                    if status in {'queued', 'running'}:
+                        rendered[column['id']] = dict(state='not_computed', status=status)
+                    elif status in {'failed', 'cancelled'}:
+                        rendered[column['id']] = dict(state=status, status=status)
+                    elif record is None:
+                        rendered[column['id']] = dict(state='no_data', value=None,
+                                                      status=status)
+                    elif record.get('value') is None:
+                        rendered[column['id']] = dict(state='no_data', value=None,
+                                                      status=status)
+                    else:
+                        rendered[column['id']] = dict(state='computed',
+                            value=record['value'], status=status)
+                row['values'] = rendered
+            manual_rows = draft_plan['manual_rows'] if cell_id is None else []
+            manual_start = max(0, offset - total)
+            manual_slots = max(0, limit - len(rows))
+            manual_page = [dict(row_kind='manual', row_id=row['row_id'],
+                                values={column['id']: row['values'].get(column['id'])
+                                        for column in visible_draft if column['type'] == 'manual'})
+                           for row in manual_rows[manual_start:manual_start + manual_slots]]
+            return dict(total_cells=total, total_rows=total + len(manual_rows),
+                offset=offset, limit=limit, feature_names=names, columns=visible_draft,
+                rows=rows + manual_page,
+                batch=inspect_batch(db_path))
         return dict(total_cells=total, offset=offset, limit=limit,
                     feature_names=names, rows=rows, batch=inspect_batch(db_path))
 
@@ -305,6 +369,22 @@ def _safe_csv(value):
     if isinstance(value, str) and value.lstrip().startswith(('=', '+', '-', '@', '\t', '\r')):
         return "'" + value
     return value
+
+
+def _draft_plan(db):
+    row = db.execute('SELECT plan_json FROM draft_plan LIMIT 1').fetchone()
+    return json.loads(row[0]) if row else None
+
+
+def _draft_raster_value(record, feature_status):
+    """Give a draft raster cell an explicit pending, value, NoData, or error state."""
+    if feature_status in {'queued', 'running'}:
+        return dict(state='not_computed', status=feature_status)
+    if feature_status in {'failed', 'cancelled'}:
+        return dict(state=feature_status, status=feature_status)
+    if record is None or record.get('value') is None or record.get('valid_area_m2', 0) <= 0:
+        return dict(state='no_data', value=None, status=feature_status)
+    return dict(state='computed', value=record['value'], status=feature_status)
 
 
 def _atomic_export(destination, writer):
@@ -325,6 +405,43 @@ def _atomic_export(destination, writer):
 
 def export_wide_csv(db_path, destination):
     with closing(_load(db_path)) as db:
+        plan = _draft_plan(db)
+        if plan:
+            columns = plan['columns']
+            overrides = plan['overrides']
+            def write_draft(temp):
+                with temp.open('w', encoding='utf-8-sig', newline='') as stream:
+                    out = csv.writer(stream)
+                    feature_statuses = dict(db.execute('SELECT name,status FROM features'))
+                    headers = []
+                    for column in columns:
+                        headers.append(_safe_csv(column['name']))
+                        if column['type'] == 'raster':
+                            headers.extend([f"{column['id']}__state", f"{column['id']}__status"])
+                    out.writerow(['row_kind','row_id','cell_id','kind','area_m2','centroid_x','centroid_y',
+                                  *headers])
+                    for cell, values in _joined_cells(db):
+                        row_values = []
+                        for column in columns:
+                            if column['type'] == 'raster':
+                                item = values.get(column['name'])
+                                rendered = _draft_raster_value(item, feature_statuses.get(
+                                    column['name'], 'failed'))
+                                row_values.extend([rendered.get('value'), rendered['state'],
+                                                   rendered.get('status', '')])
+                            else:
+                                row_values.append(overrides.get(cell['cell_id'], {}).get(column['id']))
+                        out.writerow(['cell','',_safe_csv(cell['cell_id']),_safe_csv(cell['kind']),
+                            cell['area_m2'],cell['centroid_x'],cell['centroid_y'],
+                            *[_safe_csv(value) for value in row_values]])
+                        if stream.tell() > MAX_EXPORT_BYTES: raise ValueError('export byte limit exceeded')
+                    for manual_row in plan['manual_rows']:
+                        out.writerow(['manual',_safe_csv(manual_row['row_id']),'','','','','',
+                            *[value for column in columns for value in (
+                                [_safe_csv(manual_row['values'].get(column['id']))]
+                                if column['type'] == 'manual' else ['', 'not_applicable', ''])]])
+                        if stream.tell() > MAX_EXPORT_BYTES: raise ValueError('export byte limit exceeded')
+            return _atomic_export(destination, write_draft)
         names = [r[0] for r in db.execute('SELECT name FROM features ORDER BY position')]
         def write(temp):
             with temp.open('w', encoding='utf-8-sig', newline='') as stream:
@@ -347,7 +464,7 @@ def _map(func, values):
 def _joined_cells(db):
     """Stream one cell and its bounded feature values from a single ordered join."""
     cursor = db.execute('SELECT c.cell_id,c.kind,c.area_m2,c.centroid_x,c.centroid_y, '
-        'f.name,fc.value_json FROM cells c CROSS JOIN features f '
+        'f.name,fc.value_json FROM cells c LEFT JOIN features f ON 1=1 '
         'LEFT JOIN feature_cells fc ON fc.cell_id=c.cell_id AND fc.name=f.name '
         'ORDER BY c.cell_id,f.position')
     cell_id = None
@@ -362,13 +479,44 @@ def _joined_cells(db):
             cell_id = row['cell_id']
             cell = {key: row[key] for key in
                     ('cell_id', 'kind', 'area_m2', 'centroid_x', 'centroid_y')}
-        values[row['name']] = json.loads(row['value_json']) if row['value_json'] else None
+        if row['name'] is not None:
+            values[row['name']] = json.loads(row['value_json']) if row['value_json'] else None
     if cell_id is not None:
         yield cell, values
 
 
 def export_long_csv(db_path, destination):
     with closing(_load(db_path)) as db:
+        plan = _draft_plan(db)
+        if plan:
+            columns = plan['columns']
+            manuals = [column for column in columns if column['type'] == 'manual']
+            def write_draft(temp):
+                with temp.open('w', encoding='utf-8-sig', newline='') as stream:
+                    out = csv.writer(stream)
+                    out.writerow(['row_kind','row_id','cell_id','kind','area_m2','centroid_x','centroid_y',
+                                  'column_id','feature_name','value','feature_status'])
+                    feature_statuses = dict(db.execute('SELECT name,status FROM features'))
+                    for cell, values in _joined_cells(db):
+                        for column in columns:
+                            if column['type'] == 'raster':
+                                item = values.get(column['name'])
+                                value = item.get('value') if item else None
+                                status = feature_statuses.get(column['name'], 'failed')
+                            else:
+                                value = plan['overrides'].get(cell['cell_id'], {}).get(column['id'])
+                                status = 'manual'
+                            out.writerow(['cell','',_safe_csv(cell['cell_id']),_safe_csv(cell['kind']),
+                                cell['area_m2'],cell['centroid_x'],cell['centroid_y'],column['id'],
+                                _safe_csv(column['name']),_safe_csv(value),status])
+                            if stream.tell() > MAX_EXPORT_BYTES: raise ValueError('export byte limit exceeded')
+                    for manual_row in plan['manual_rows']:
+                        for column in manuals:
+                            out.writerow(['manual',_safe_csv(manual_row['row_id']),'','','','','',column['id'],
+                                _safe_csv(column['name']),
+                                _safe_csv(manual_row['values'].get(column['id'])),'manual'])
+                            if stream.tell() > MAX_EXPORT_BYTES: raise ValueError('export byte limit exceeded')
+            return _atomic_export(destination, write_draft)
         def write(temp):
             with temp.open('w', encoding='utf-8-sig', newline='') as stream:
                 out = csv.writer(stream)
@@ -390,17 +538,38 @@ def export_long_csv(db_path, destination):
 def export_json(db_path, destination):
     with closing(_load(db_path)) as db:
         info = inspect_batch(db_path)
+        plan = _draft_plan(db)
         def write(temp):
             with temp.open('w', encoding='utf-8') as stream:
                 stream.write('{"batch":')
                 json.dump(info, stream, ensure_ascii=False, allow_nan=False, separators=(',', ':'))
                 stream.write(',"cells":[')
                 first = True
+                feature_statuses = (dict(db.execute('SELECT name,status FROM features')) if plan else {})
                 for cell, values in _joined_cells(db):
-                    record = {**cell, 'values': values}
+                    if plan:
+                        cell_values = {column['id']: (
+                            _draft_raster_value(values.get(column['name']),
+                                feature_statuses.get(column['name'], 'failed'))
+                            if column['type'] == 'raster' else
+                            plan['overrides'].get(cell['cell_id'], {}).get(column['id']))
+                            for column in plan['columns']}
+                        record = {**cell, 'row_kind':'cell', 'values':cell_values}
+                    else:
+                        cell_values = {name: item for name, item in values.items()}
+                        record = {**cell, 'values':cell_values}
                     if not first: stream.write(',')
                     json.dump(record, stream, ensure_ascii=False, allow_nan=False, separators=(',', ':'))
                     first = False
                     if stream.tell() > MAX_EXPORT_BYTES: raise ValueError('export byte limit exceeded')
-                stream.write(']}')
+                stream.write(']')
+                if plan:
+                    stream.write(',"manual_rows":')
+                    json.dump([dict(row_kind='manual', **row) for row in plan['manual_rows']],
+                              stream, ensure_ascii=False, allow_nan=False, separators=(',', ':'))
+                    stream.write(',"draft_annotations":')
+                    json.dump({key: plan[key] for key in ('parent_geometry_digest','plan_hash',
+                        'columns','excluded_cell_ids') if key in plan},
+                        stream, ensure_ascii=False, allow_nan=False, separators=(',', ':'))
+                stream.write('}')
         return _atomic_export(destination, write)

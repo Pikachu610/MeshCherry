@@ -369,22 +369,44 @@ class WorkbenchServer(ThreadingHTTPServer):
 
     def start_comparison(self,data):
         """Compare an owned accepted mesh; calculations never replace that mesh."""
-        required={'mesh_job_id','raster_path','band','semantics','value_units','cell_size_m'}
-        if not isinstance(data,dict) or required-set(data) or set(data)-required-{'request_id'}:
-            raise ValueError('Comparison requires mesh, raster, band, semantics, units and square size')
+        if not isinstance(data,dict):
+            raise ValueError('Comparison requires a configuration object')
+        baseline_mode=data.get('baseline_mode','target_grid')
+        if baseline_mode not in {'native_raster','target_grid','resolution_estimate'}:
+            raise ValueError('Chọn pixel gốc, lưới theo độ phân giải hoặc ước tính số node')
+        required={'mesh_job_id'}
+        if baseline_mode=='resolution_estimate':
+            required|={'cell_size_m','source_resolution_m'}
+        else:
+            required|={'raster_path','band','semantics','value_units'}
+            if baseline_mode=='target_grid':required.add('cell_size_m')
+        allowed=required|{'request_id','baseline_mode'}
+        if baseline_mode=='native_raster':allowed.add('cell_size_m')
+        if required-set(data) or set(data)-allowed:
+            raise ValueError('Thiếu trường bắt buộc hoặc có trường không phù hợp với cách so sánh')
         import math
         import hashlib
         import re
         request_id=data.get('request_id')
         if request_id is not None and (not isinstance(request_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,80}',request_id)):
             raise ValueError('Invalid comparison request ID')
-        if (not isinstance(data['mesh_job_id'],str) or not isinstance(data['raster_path'],str)
+        def positive_size(value):
+            try:return type(value) in (int,float) and math.isfinite(value) and value>0
+            except OverflowError:return False
+        if not isinstance(data['mesh_job_id'],str):
+            raise ValueError('Cấu hình so sánh không hợp lệ')
+        if baseline_mode!='native_raster' and not positive_size(data['cell_size_m']):
+            raise ValueError('Nhập kích thước ô tham chiếu dương, hữu hạn theo mét')
+        if baseline_mode=='native_raster' and data.get('cell_size_m') is not None:
+            raise ValueError('Pixel gốc dùng độ phân giải của raster, không nhập kích thước ô mới')
+        if baseline_mode=='resolution_estimate':
+            if not positive_size(data['source_resolution_m']):
+                raise ValueError('Nhập độ phân giải nguồn dương, hữu hạn theo mét')
+        elif (not isinstance(data['raster_path'],str) or not data['raster_path'].strip()
                 or type(data['band']) is not int or data['band']<1
                 or data['semantics'] not in {'intensive','extensive','categorical'}
-                or not isinstance(data['value_units'],str) or not data['value_units'].strip() or len(data['value_units'])>128
-                or type(data['cell_size_m']) not in (int,float)
-                or not math.isfinite(data['cell_size_m']) or data['cell_size_m']<=0):
-            raise ValueError('Cấu hình so sánh không hợp lệ')
+                or not isinstance(data['value_units'],str) or not data['value_units'].strip() or len(data['value_units'])>128):
+            raise ValueError('Cấu hình raster so sánh không hợp lệ')
         with self.lock:
             fingerprint=hashlib.sha256(json.dumps(data,sort_keys=True,allow_nan=False).encode()).hexdigest()
             if request_id:
@@ -401,11 +423,14 @@ class WorkbenchServer(ThreadingHTTPServer):
             mesh_data=_json(cells)
             if (not mesh_data.get('cells') or any(row.get('kind')!='triangle' for row in mesh_data['cells'])):
                 raise ValueError('Chọn lưới tam giác đã tạo để so sánh với lưới vuông')
-            raster=self.permitted(data['raster_path'])
-            for file in raster_bundle_paths(raster): self.permitted(file)
+            raster=None
+            if baseline_mode!='resolution_estimate':
+                raster=self.permitted(data['raster_path'])
+                for file in raster_bundle_paths(raster): self.permitted(file)
             analysis_crs=metric_crs(mesh_data['crs_wkt']).to_wkt()
-            config={**copy.deepcopy(data),'raster_path':str(raster),'analysis_crs':analysis_crs,
+            config={**copy.deepcopy(data),'baseline_mode':baseline_mode,'analysis_crs':analysis_crs,
                     'cells_path':str(cells),'edge_subdivisions':8}
+            if raster is not None:config['raster_path']=str(raster)
             from .extraction import _digest
             retained={str(cells):_digest(cells),str(mesh_manifest):_digest(mesh_manifest)}
             manifest=dict(schema_version='mesh-comparison-manifest-v1',operation='comparison',
@@ -424,9 +449,26 @@ class WorkbenchServer(ThreadingHTTPServer):
                         output=self.permitted(self.output_root/('comparison-'+job_id),exists=False,write=True)
                         output.mkdir(exist_ok=False);control.output=output
                         write_json(output/'config.json',config)
-                        report=compare_mesh(cells,raster,analysis_crs=analysis_crs,
-                            cell_size_m=config['cell_size_m'],band=config['band'],
-                            semantics=config['semantics'],value_units=config['value_units'],edge_subdivisions=8)
+                        if baseline_mode=='resolution_estimate':
+                            from .comparison_estimate import compare_resolution_estimate
+                            report=compare_resolution_estimate(cells,analysis_crs=analysis_crs,
+                                cell_size_m=config['cell_size_m'],source_resolution_m=config['source_resolution_m'])
+                        else:
+                            options=dict(analysis_crs=analysis_crs,cell_size_m=config.get('cell_size_m'),
+                                band=config['band'],semantics=config['semantics'],
+                                value_units=config['value_units'],edge_subdivisions=8)
+                            if baseline_mode=='native_raster':options['baseline_mode']=baseline_mode
+                            report=compare_mesh(cells,raster,**options)
+                        from shapely.geometry import Polygon
+                        from .comparison_allocation import allocation_summary
+                        areas=[]
+                        for row in mesh_data['cells']:
+                            checkpoint()
+                            areas.append(Polygon(row['xy']).area)
+                        reference_area=None
+                        if baseline_mode!='native_raster':
+                            reference_area=config['cell_size_m']**2
+                        report['spatial_allocation']=allocation_summary(areas,reference_area)
                         checkpoint()
                         if any(_digest(Path(p))!=expected for p,expected in retained.items()):
                             raise ValueError('Lưới mốc đã thay đổi trong lúc so sánh')
@@ -564,10 +606,10 @@ class Handler(BaseHTTPRequestHandler):
                      for weight in ('Regular', 'Medium', 'SemiBold', 'Bold')}
             if path in fonts:
                 return self.respond((ASSETS/'fonts'/fonts[path]).read_bytes(), content_type='font/ttf')
-            if path in {'/','/app.js','/coach.js','/attribute_table.js','/downloads.js','/attribute_table.css','/workspace_layout.css','/style.css','/wizard.css','/icon.png','/favicon.ico'}:
+            if path in {'/','/app.js','/coach.js','/attribute_table.js','/downloads.js','/extraction_draft.js','/extraction_draft.css','/attribute_table.css','/workspace_layout.css','/style.css','/wizard.css','/icon.png','/favicon.ico'}:
                 name={'/':'index.html','/icon.png':'meshcherry-icon-v1.png',
                       '/favicon.ico':'meshcherry-icon-v1.ico'}.get(path,path[1:])
-                mime={'index.html':'text/html','app.js':'text/javascript','coach.js':'text/javascript','attribute_table.js':'text/javascript','downloads.js':'text/javascript','attribute_table.css':'text/css','workspace_layout.css':'text/css','style.css':'text/css','wizard.css':'text/css',
+                mime={'index.html':'text/html','app.js':'text/javascript','coach.js':'text/javascript','attribute_table.js':'text/javascript','downloads.js':'text/javascript','extraction_draft.js':'text/javascript','extraction_draft.css':'text/css','attribute_table.css':'text/css','workspace_layout.css':'text/css','style.css':'text/css','wizard.css':'text/css',
                       'meshcherry-icon-v1.png':'image/png','meshcherry-icon-v1.ico':'image/vnd.microsoft.icon'}[name]
                 body=(ASSETS/name).read_bytes()
                 if name=='index.html':body=body.replace(b'{{APP_VERSION}}',__version__.encode('ascii'))
@@ -695,10 +737,13 @@ class Handler(BaseHTTPRequestHandler):
             if self.headers.get_content_type()!='application/json':
                 return self.respond(dict(error='application/json required'),415)
             count=int(self.headers.get('Content-Length','0'))
-            ceiling=1048576 if path=='/api/batch/start' else 65536
+            ceiling=1048576 if path in {'/api/batch/start','/api/extraction-draft/preview'} else 65536
             if not 0<count<=ceiling: return self.respond(dict(error='Request body size limit'),413)
             raw=self.rfile.read(count); self.body_consumed=True
             data=json.loads(raw,parse_constant=lambda value: (_ for _ in ()).throw(ValueError('nonfinite JSON')))
+            if path=='/api/extraction-draft/preview':
+                from .batch_api import draft_preview
+                return self.respond(draft_preview(self.server,data))
             if path=='/api/batch/start':
                 from .batch_api import start_batch
                 return self.respond(start_batch(self.server,data))

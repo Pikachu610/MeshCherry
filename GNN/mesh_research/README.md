@@ -62,6 +62,48 @@ The sweep runs nominal 250 m, 500 m and 1000 m cases using the same canonical RO
 
 ## Test
 
+### MeshCherry extraction table review (3.1.0rc4)
+
+After accepting a mesh, open Extract and choose one or multiple rasters.
+The extraction action first opens an editable table plan. Raster values show
+`Chưa tính` until the user reviews and confirms the plan. Rename, reorder or
+remove raster columns, add typed manual columns, enter annotations and select
+which accepted cells to extract. Manual rows belong to a supplementary table:
+they have no geometry and create no graph nodes. Cell IDs and accepted geometry
+stay immutable. The server validates the canonical plan and its parent digest
+before starting the one-feature or multi-feature batch.
+
+Preview pages contain at most 200 rows and 20 visible columns; a plan supports
+up to 500 combined columns and 10,000 annotations/exclusions/manual rows,
+subject to the 1 MiB request limit. Completed results distinguish computed
+values, NoData, pending, failed and cancelled features. Wide CSV with metadata,
+long CSV with metadata and JSON preserve column identities and manual annotations.
+
+Use **Dừng trích xuất** to request cooperative cancellation. **Đang dừng** remains
+visible until the worker acknowledges a terminal state. Finished raster
+transactions are retained; an in-flight raster transaction is rolled back.
+Cancellation latency depends on the current raster operation. The accepted mesh
+remains available. Large-scale throughput and native visual acceptance require
+separate measurements; unit tests alone do not establish them.
+
+### Structured baseline comparison
+
+Tools offers three baselines: count actual native raster pixels intersecting
+the accepted triangular ROI; construct a requested-resolution square grid; or
+estimate counts from ROI area and declared resolution without reading a raster.
+Counts represent cell-centred graph nodes, not triangle vertices. Signed node
+reduction can be negative. Native pixel counts, valid pixel counts and clipped
+components are distinct. Native self-comparison errors are zero by definition.
+An area-only estimate reports no measured reconstruction error.
+
+For raster comparisons, intensive RMSE integrates cell-to-source-pixel errors
+over common valid intersection support. Extensive fields report conservation;
+categorical fields report class fractions/agreement. Two-pass intensive reads
+share per-job read/pair limits. Spatial allocation uses nine ROI-clipped zones,
+assigning each node once by a representative point. This measures spatial
+density, while alignment with relief and GNN prediction accuracy remain
+separate, unassessed claims. Finer target cells introduce no new observations.
+
 ### MeshCherry large-mesh viewer
 
 The result viewer retains full cell geometry and attributes up to the 100,000-cell

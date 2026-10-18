@@ -51,8 +51,10 @@ class ComparisonTests(unittest.TestCase):
                 dst.write_mask(np.asarray(mask, dtype='uint8'))
 
     def compare(self, **kwargs):
+        baseline_mode = kwargs.get('baseline_mode', 'target_grid')
+        size = kwargs.pop('cell_size_m', None if baseline_mode == 'native_raster' else 1)
         return compare_mesh(self.mesh, self.raster, analysis_crs=self.crs,
-                            cell_size_m=kwargs.pop('cell_size_m', 1), value_units='m', **kwargs)
+                            cell_size_m=size, value_units='m', **kwargs)
 
     def test_intensive_comparison_measured_errors_and_identity(self):
         before = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in self.root.iterdir()}
@@ -77,6 +79,99 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(result['common_support_area_m2'], 3)
         for part in ('structured', 'unstructured'):
             self.assertAlmostEqual(result[part]['valid_support_area_m2'], 3)
+
+    def test_native_raster_baseline_counts_roi_pixels_and_reports_identity(self):
+        self.write([[10, 30], [10, 30], [90, 90], [90, 90]])
+        result = self.compare(baseline_mode='native_raster')
+        self.assertEqual(result['baseline']['mode'], 'native_raster')
+        self.assertEqual(result['baseline']['source_pixel_count'], 4)
+        self.assertEqual(result['baseline']['valid_source_pixel_count'], 4)
+        self.assertEqual(result['baseline']['clipped_component_count'], 4)
+        self.assertEqual(result['baseline']['source_resolution'],
+                         dict(x=1., y=1., units='metre', crs='EPSG:32649'))
+        self.assertEqual(result['provenance']['shape'], [4, 2])
+        self.assertEqual(result['structured']['node_count'], 4)
+        self.assertEqual(result['metrics']['structured']['rmse'], 0)
+        self.assertIn('tautological', result['metrics']['structured']['interpretation'])
+        self.assertAlmostEqual(result['metrics']['unstructured']['rmse'], np.sqrt(75))
+        self.assertIsNone(result['square_grid']['cell_size_m'])
+
+    def test_spatial_zones_reconcile_all_global_node_counts(self):
+        for mode in ('target_grid', 'native_raster'):
+            report = self.compare(baseline_mode=mode)
+            zones = report['spatial_zones']
+            self.assertEqual(zones['relief_alignment'], 'not_assessed')
+            self.assertIn('representative point', zones['allocation_rule'])
+            self.assertEqual(len(zones['rows']), 9)
+            self.assertEqual(sum(z['mesh_node_count'] for z in zones['rows']),
+                             report['unstructured']['node_count'])
+            self.assertEqual(sum(z['structured_node_count'] for z in zones['rows']),
+                             report['structured']['node_count'])
+            self.assertEqual(sum(z['graph_node_delta'] for z in zones['rows']),
+                             report['graph_node_delta'])
+            for zone in zones['rows']:
+                self.assertGreaterEqual(zone['roi_area_m2'], 0)
+                self.assertGreaterEqual(zone['mesh_nodes_per_km2'], 0)
+                self.assertGreaterEqual(zone['structured_nodes_per_km2'], 0)
+
+    def test_intensive_workload_limits_are_job_aggregate(self):
+        caps = dict(CEILINGS)
+        caps['max_pixels_read'] = 5
+        with patch('gis_mesh_workbench.comparison.limits', return_value=caps):
+            with self.assertRaisesRegex(ValueError, 'read pixel limit'):
+                self.compare()
+
+    def test_native_pixel_count_preserves_rotated_affine_grid(self):
+        transform = Affine(1, .2, 500000, .2, -1, 1000002)
+        corners = [transform @ point for point in ((0, 0), (2, 0), (2, 2), (0, 2))]
+        a, b, c, d = corners
+        self.cells = (Cell('rot-a', 'triangle', (a, b, c)),
+                      Cell('rot-b', 'triangle', (a, c, d)))
+        self.freeze()
+        with rasterio.open(self.raster, 'w', driver='GTiff', width=2, height=2,
+            count=1, dtype='float64', crs=self.crs, transform=transform) as dst:
+            dst.write(np.array([[10., 30.], [10., 30.]]), 1)
+        result = self.compare(baseline_mode='native_raster')
+        self.assertEqual(result['baseline']['source_pixel_count'], 4)
+        self.assertEqual(result['baseline']['clipped_component_count'], 4)
+        self.assertEqual(result['provenance']['affine'], list(transform))
+
+    def test_native_pixel_count_separates_nodata_from_geometric_roi_count(self):
+        self.write([[10, 30], [10, 30]], [[255, 0], [255, 255]])
+        result = self.compare(baseline_mode='native_raster')
+        self.assertEqual(result['baseline']['source_pixel_count'], 4)
+        self.assertEqual(result['baseline']['valid_source_pixel_count'], 3)
+        self.assertEqual(result['common_support_area_m2'], 3)
+        self.assertEqual(result['metrics']['structured']['rmse'], 0)
+
+    def test_native_mode_rejects_target_cell_size(self):
+        with self.assertRaisesRegex(ValueError, 'only valid for target_grid'):
+            self.compare(baseline_mode='native_raster', cell_size_m=1)
+
+    def test_60m_native_vs_30m_target_grid_counts_and_piecewise_constant_error(self):
+        self.cells = (
+            Cell('wide-a', 'triangle', ((500000, 1000000), (500120, 1000000), (500120, 1000060))),
+            Cell('wide-b', 'triangle', ((500000, 1000000), (500120, 1000060), (500000, 1000060))),
+        )
+        self.freeze()
+        with rasterio.open(self.raster, 'w', driver='GTiff', width=2, height=1,
+            count=1, dtype='float64', crs=self.crs,
+            transform=Affine(60, 0, 500000, 0, -60, 1000060)) as dst:
+            dst.write(np.array([[10., 30.]]), 1)
+
+        target = compare_mesh(self.mesh, self.raster, analysis_crs=self.crs,
+            cell_size_m=30, value_units='m')
+        native = compare_mesh(self.mesh, self.raster, analysis_crs=self.crs,
+            baseline_mode='native_raster', cell_size_m=None, value_units='m')
+        self.assertEqual(target['baseline']['node_count'], 8)
+        self.assertEqual(native['baseline']['node_count'], 2)
+        self.assertEqual(native['baseline']['source_pixel_count'], 2)
+        self.assertEqual(target['baseline']['alignment'], 'accepted triangle union bounding-box lower-left')
+        self.assertEqual(target['baseline']['source_resolution']['x'], 60.)
+        self.assertEqual(target['metrics']['structured']['rmse'], 0)
+        self.assertEqual(native['metrics']['structured']['rmse'], 0)
+        self.assertIn('do not create new source information',
+                      target['baseline']['source_vs_requested']['interpretation'])
 
     def test_extensive_and_categorical_are_semantically_separate(self):
         r = self.compare(semantics='extensive')
@@ -322,6 +417,7 @@ class ComparisonTests(unittest.TestCase):
         self.assertAlmostEqual(r['common_support_area_m2'], r['domain_area_m2'], places=6)
         for p in r['workload']['passes']:
             self.assertEqual(p['pixels_read'], 4)
+        self.assertEqual(r['workload']['aggregate']['pixels_read'], 8)
         for part in r['metrics'].values(): self.assertEqual(part['rmse'], 0)
 
     def test_mismatched_crs_and_scale_rejected(self):
