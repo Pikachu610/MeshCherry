@@ -36,12 +36,12 @@ def checkpoint():
     if control is not None and control.cancel.is_set(): raise Cancelled('Đã dừng theo yêu cầu')
 
 
-def observe(stage,completed=None,total=None):
+def observe(stage,completed=None,total=None,unit='items',pass_index=None):
     checkpoint()
     control=current()
     if control is not None:
         control.stage(stage)
-        if total and completed is not None: control.measure(completed,total)
+        if total and completed is not None: control.measure(completed,total,unit=unit,pass_index=pass_index)
 
 
 class JobControl:
@@ -50,7 +50,7 @@ class JobControl:
         self.clock=clock; self.started=clock(); self.finished=None
         self.cancel=threading.Event(); self.committed=False; self.committing=False; self.process=None
         self.phase='config'; self.phase_started=self.started
-        self.phase_percent=None; self.points=deque(maxlen=8)
+        self.phase_percent=None; self.phase_progress=None; self.points=deque(maxlen=8)
         self.lines=deque(maxlen=200); self.line_count=0; self.output=None
         self.long_lines=False
         self.has_gmsh_log=False
@@ -64,15 +64,42 @@ class JobControl:
         with self.lock:
             if value!=self.phase:
                 self.phase=value; self.phase_started=self.clock()
-                self.phase_percent=None; self.points.clear()
+                self.phase_percent=None; self.phase_progress=None; self.points.clear()
 
-    def measure(self,completed,total):
-        if not total: return
+    def measure(self,completed,total,*,unit='items',pass_index=None):
+        if (isinstance(completed,bool) or isinstance(total,bool)
+                or not isinstance(completed,(int,float)) or not isinstance(total,(int,float))
+                or not math.isfinite(completed) or not math.isfinite(total) or total<=0): return
         percent=100*completed/total
         if not math.isfinite(percent) or not 0<=percent<=100: return
         with self.lock:
+            candidate=None
+            if (type(completed) is int and type(total) is int
+                    and isinstance(unit,str) and unit
+                    and (pass_index is None or type(pass_index) is int and pass_index>=0)):
+                candidate=dict(scope='phase',phase=self.phase,completed=completed,
+                    total=total,unit=unit)
+                if pass_index is not None: candidate['pass_index']=pass_index
+                previous=self.phase_progress
+                same_work=(previous is not None and previous['phase']==candidate['phase']
+                    and previous.get('pass_index')==candidate.get('pass_index')
+                    and previous['total']==total and previous['unit']==unit)
+                same_phase_pass=(previous is not None
+                    and previous['phase']==candidate['phase']
+                    and previous.get('pass_index')==candidate.get('pass_index'))
+                # A phase/pass has one work plan. A changed denominator or unit
+                # is inconsistent progress data, not a new pass, and must not
+                # silently reset the numerator shown to older clients.
+                if same_phase_pass and not same_work:
+                    return
+                if same_work and completed<previous['completed']:
+                    return
+                if previous is not None and not same_work:
+                    self.points.clear()
             if self.phase_percent is not None and percent<self.phase_percent: self.points.clear()
             self.phase_percent=percent
+            if candidate is not None:
+                self.phase_progress=candidate
             now=self.clock()
             if not self.points or (percent>self.points[-1][1] and now-self.points[-1][0]>=.25):
                 self.points.append((now,percent))
@@ -105,10 +132,13 @@ class JobControl:
                     if remaining>0:
                         eta=dict(scope=self.phase,basis='observed_phase_rate',
                             low_seconds=max(1,remaining*.5),high_seconds=max(2,remaining*2))
-            return dict(phase=self.phase,phase_percent=self.phase_percent,
+            result=dict(phase=self.phase,phase_percent=self.phase_percent,
                 elapsed_seconds=max(0,now-self.started),cancel_requested=self.cancel.is_set(),
                 eta=eta,log_lines=list(self.lines),log_line_count=self.line_count,
                 log_dropped=max(0,self.line_count-len(self.lines)),has_gmsh_log=self.has_gmsh_log)
+            if self.phase_progress is not None:
+                result['phase_progress']=dict(self.phase_progress)
+            return result
 
     def log_snapshot(self,cursor=0):
         if type(cursor) is not int or cursor<0: raise ValueError('Invalid log cursor')

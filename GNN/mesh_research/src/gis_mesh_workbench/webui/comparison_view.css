@@ -5,6 +5,44 @@
   margin: 1rem 0 .5rem;
 }
 
+.comparison-count-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: .65rem;
+  margin: .85rem 0;
+}
+
+.comparison-count-metric {
+  display: grid;
+  align-content: center;
+  gap: .25rem;
+  min-width: 0;
+  min-height: 4.75rem;
+  padding: .7rem .85rem;
+  border: 1px solid #d6ddd8;
+  border-radius: .65rem;
+  background: #f8faf8;
+}
+
+.comparison-count-metric strong {
+  color: #17251d;
+  font-size: clamp(1.2rem, 1.8vw, 1.65rem);
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+.comparison-count-metric span { color: #516057; font-size: .82rem; }
+.comparison-task { display: grid; gap: .45rem; margin: .5rem 0; }
+.comparison-task progress { width: 100%; min-height: 1rem; accent-color: #2475a4; }
+.comparison-task progress:indeterminate { accent-color: #7b8f83; }
+.comparison-task .actions { margin: 0; }
+.comparison-evaluation { display: grid; gap: .35rem; margin: 1rem 0; padding: 1rem; border: 1px solid #d6ddd8; border-radius: .75rem; background: #fbfcfb; }
+.comparison-evaluation h4 { margin: 0; font-size: 1.1rem; }
+.comparison-evaluation p { margin: .2rem 0 .45rem; }
+.comparison-evaluate { min-height: 48px; padding: .7rem 1rem; font-size: 16px; font-weight: 700; }
+#comparison-count-run { min-height: 48px; padding: .7rem 1rem; font-size: 16px; font-weight: 700; }
+
 .comparison-visual-metric {
   display: grid;
   align-content: center;
@@ -94,4 +132,7 @@
   .comparison-visual-grid {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  .comparison-count-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .comparison-evaluate, #comparison-count-run { width: 100%; }
 }

@@ -9,6 +9,7 @@ import random
 from pathlib import Path
 
 import numpy as np
+import shapely
 from shapely.geometry import box
 from shapely.ops import unary_union
 from shapely.strtree import STRtree
@@ -17,6 +18,10 @@ from .extraction import _cells, _digest, _ExactFloatSum
 from .indexed_extraction import (
     MAX_CLASS_ENTRIES, MAX_WINDOWS, footprint, limits, metadata,
     window_candidates, windows,
+)
+from .comparison_kernel import (
+    GeometryWeightCache, GeometryWeights, geometry_batch,
+    geometry_chunk_pixels, automatic_kernel,
 )
 from .job_control import checkpoint, observe
 from .mesh_workflow import read_frozen
@@ -190,7 +195,8 @@ def _zone_node_counts(polygons, layout):
 
 def compare_mesh(cells_path, raster_path, *, analysis_crs, cell_size_m=None,
                  baseline_mode='target_grid', band=1, semantics='intensive',
-                 value_units='', edge_subdivisions=8):
+                 value_units='', edge_subdivisions=8, _kernel='auto',
+                 _geometry_cache_bytes=16*1024*1024):
     """Compare unchanged frozen triangles with a newly clipped square partition.
 
     Intensive errors integrate squared/absolute differences on pixel-cell
@@ -199,7 +205,7 @@ def compare_mesh(cells_path, raster_path, *, analysis_crs, cell_size_m=None,
     totals; categorical output checks conservation and dominant-class spatial loss.
     Existing indexed read/pair/class ceilings and cooperative cancellation apply.
     """
-    checkpoint()
+    observe('comparison_prepare')
     target = metric_crs(analysis_crs)
     if baseline_mode not in {'target_grid', 'native_raster'}:
         raise ValueError('comparison baseline mode must be target_grid or native_raster')
@@ -213,6 +219,8 @@ def compare_mesh(cells_path, raster_path, *, analysis_crs, cell_size_m=None,
         raise ValueError('declared semantics and value units required')
     if type(edge_subdivisions) is not int or not 1 <= edge_subdivisions <= 64:
         raise ValueError('edge_subdivisions must be an integer from 1 to 64')
+    if _kernel not in {'auto', 'scalar', 'vectorized'}:
+        raise ValueError('comparison kernel must be scalar or vectorized')
     cells_path, raster_path = Path(cells_path), Path(raster_path)
     mesh_hash = _digest(cells_path)
     manifest_path = cells_path.parent/'manifest.json'
@@ -237,6 +245,9 @@ def compare_mesh(cells_path, raster_path, *, analysis_crs, cell_size_m=None,
     zone_counts = dict(unstructured=mesh_zone_counts,
                        structured=structured_zone_counts)
     trees = {name: STRtree(polys) for name, polys in parts.items()}
+    geometry_parts = dict(parts, __domain__=domain)
+    geometry_arrays = {name: tree.geometries for name, tree in trees.items()}
+    chunk_pixels = geometry_chunk_pixels(geometry_parts)
     states = {name: [dict(area=0., mean=0., total=0., total_sum=_ExactFloatSum(), classes={}) for _ in polys]
               for name, polys in parts.items()}
     cap = limits()
@@ -254,9 +265,12 @@ def compare_mesh(cells_path, raster_path, *, analysis_crs, cell_size_m=None,
     native_preview_polygons = []
     native_preview_seen = 0
     native_preview_rng = random.Random(0)
+    geometry_cache = GeometryWeightCache(_geometry_cache_bytes)
 
     # One shared source traversal per pass guarantees identical masks and band.
     with open_raster(raster_path) as src:
+        selected_kernel = (automatic_kernel(src,target,semantics,baseline_mode,parts)
+                           if _kernel == 'auto' else _kernel)
         metadata(src, band, cap)
         source_crs = src.crs.to_wkt()
         affine, shape = list(src.transform), [src.height, src.width]
@@ -267,7 +281,15 @@ def compare_mesh(cells_path, raster_path, *, analysis_crs, cell_size_m=None,
             crs=src.crs.to_string())
         aggregate = dict(windows_scanned=0, windows_read=0, pixels_read=0,
                          candidate_pairs=0, peak_window_pixels=0)
+        total_windows = sum(1 for _ in windows(src, band, cap))
+        cache_counts = dict(hits=0, misses=0, bytes=0,
+                            status=('enabled' if _geometry_cache_bytes else 'disabled_by_budget')
+                            if semantics == 'intensive' else 'not_applicable')
         for pass_index in range(2 if semantics == 'intensive' else 1):
+            phase = ('values_pass1' if pass_index == 0 else 'error_pass2')
+            if semantics != 'intensive':
+                phase = 'measure_pass1'
+            observe(phase, 0, total_windows, unit='windows', pass_index=pass_index)
             if pass_index:
                 if not math.isfinite(support) or support <= 0:
                     raise ValueError('comparison has no finite valid common raster support')
@@ -283,13 +305,14 @@ def compare_mesh(cells_path, raster_path, *, analysis_crs, cell_size_m=None,
                             raise ValueError('comparison intensive mean exceeds finite numeric range')
             counters = dict(windows_scanned=0, windows_read=0, pixels_read=0,
                             candidate_pairs=0, peak_window_pixels=0)
-            for window in windows(src, band, cap):
-                observe('extraction')
+            for window_index, window in enumerate(windows(src, band, cap)):
                 counters['windows_scanned'] += 1
                 aggregate['windows_scanned'] += 1
                 if aggregate['windows_scanned'] > MAX_WINDOWS:
                     raise ValueError('comparison window scan limit exceeded')
                 if not len(window_candidates(src, target, trees['unstructured'], window, len(triangles))):
+                    observe(phase, counters['windows_scanned'], total_windows,
+                            unit='windows', pass_index=pass_index)
                     continue
                 count = int(window.width*window.height)
                 counters['pixels_read'] += count
@@ -305,61 +328,92 @@ def compare_mesh(cells_path, raster_path, *, analysis_crs, cell_size_m=None,
                 # exact-integer range. Preserve their dtype and dictionary keys.
                 values = np.asarray(data.data) if semantics == 'categorical' else np.asarray(data.data, float)
                 valid = ~np.ma.getmaskarray(data) & np.isfinite(values)
-                for row in range(int(window.height)):
-                    for col in range(int(window.width)):
-                        if col % 128 == 0:
+                width = int(window.width)
+                total = int(window.width*window.height)
+                flat_values = values.ravel()
+                flat_valid = valid.ravel()
+                for chunk_start in range(0, total, chunk_pixels):
+                    checkpoint()
+                    chunk_stop = min(total, chunk_start+chunk_pixels)
+                    offsets = np.arange(chunk_start, chunk_stop, dtype=np.int64)
+                    rows = offsets // width
+                    cols = offsets % width
+                    absolute_cols = cols + int(window.col_off)
+                    absolute_rows = rows + int(window.row_off)
+                    cache_key = (window_index, chunk_start)
+                    cached = geometry_cache.get(cache_key) if semantics == 'intensive' else None
+                    if cached is None:
+                        if semantics == 'intensive':
+                            cache_counts['misses'] += 1
+                        pixels, pixel_areas, domain_areas, intersection_data, candidate_data = geometry_batch(
+                            src, target, absolute_cols, absolute_rows, edge_subdivisions,
+                            geometry_parts, trees, valid_mask=flat_valid[offsets],
+                            kernel=selected_kernel, polygon_arrays=geometry_arrays)
+                        weights = GeometryWeights(pixel_areas, domain_areas,
+                                                  intersection_data, candidate_data)
+                        if pass_index == 0 and semantics == 'intensive':
+                            geometry_cache.put(cache_key, weights)
+                            cache_counts['bytes'] = geometry_cache.bytes_used
+                    else:
+                        cache_counts['hits'] += 1
+                        weights = cached
+                        pixels = None
+                        pixel_areas, domain_areas = weights.pixel_areas, weights.domain_areas
+                        intersection_data, candidate_data = weights.intersections, weights.candidate_counts
+
+                    batch_candidates = sum(candidate_data.values())
+                    counters['candidate_pairs'] += batch_candidates
+                    aggregate['candidate_pairs'] += batch_candidates
+                    if aggregate['candidate_pairs'] > cap['max_candidate_pairs']:
+                        raise ValueError('comparison candidate pair limit exceeded')
+
+                    if baseline_mode == 'native_raster' and pass_index == 0:
+                        clipped = shapely.intersection(pixels, domain)
+                        for local_index, geom in enumerate(clipped):
+                            if local_index % 128 == 0:
+                                checkpoint()
+                            component_count = _polygon_component_count(geom)
+                            if not component_count:
+                                continue
+                            native_counts['source_pixel_count'] += 1
+                            native_counts['clipped_component_count'] += component_count
+                            native_preview_seen += 1
+                            if len(native_preview_polygons) < 1200:
+                                native_preview_polygons.append(geom)
+                            else:
+                                replacement = native_preview_rng.randrange(native_preview_seen)
+                                if replacement < 1200:
+                                    native_preview_polygons[replacement] = geom
+                            zone_counts['structured'][_zone_index(
+                                zones, geom.representative_point())] += 1
+                            if flat_valid[int(offsets[local_index])]:
+                                native_counts['valid_source_pixel_count'] += 1
+
+                    for local_index, offset in enumerate(offsets):
+                        if local_index % 128 == 0:
                             checkpoint()
-                        pixel = None
-                        if baseline_mode == 'native_raster' and pass_index == 0:
-                            pixel = footprint(src, target, int(window.col_off)+col,
-                                int(window.row_off)+row, subdivisions=edge_subdivisions)
-                            clipped = pixel.intersection(domain)
-                            component_count = _polygon_component_count(clipped)
-                            if component_count:
-                                native_counts['source_pixel_count'] += 1
-                                native_counts['clipped_component_count'] += component_count
-                                native_preview_seen += 1
-                                if len(native_preview_polygons) < 1200:
-                                    native_preview_polygons.append(clipped)
-                                else:
-                                    replacement = native_preview_rng.randrange(native_preview_seen)
-                                    if replacement < 1200:
-                                        native_preview_polygons[replacement] = clipped
-                                zone_counts['structured'][_zone_index(
-                                    zones, clipped.representative_point())] += 1
-                                if valid[row, col]:
-                                    native_counts['valid_source_pixel_count'] += 1
-                        if not valid[row, col]:
+                        offset = int(offset)
+                        if not flat_valid[offset]:
                             continue
-                        if pixel is None:
-                            pixel = footprint(src, target, int(window.col_off)+col,
-                                int(window.row_off)+row, subdivisions=edge_subdivisions)
-                        value = values[row, col].item() if semantics == 'categorical' else float(values[row, col])
-                        # Count the support once, independently of partition.
+                        value = flat_values[offset].item() if semantics == 'categorical' else float(flat_values[offset])
+                        domain_area = float(domain_areas[local_index]) if pass_index == 0 else 0.
                         if pass_index == 0:
-                            area = pixel.intersection(domain).area
-                            support += area
+                            support += domain_area
                             if semantics == 'extensive':
-                                source_total_sum.add(value*(area/pixel.area))
-                            if semantics == 'categorical' and area > 0:
+                                source_total_sum.add(value*(domain_area/float(pixel_areas[local_index])))
+                            if semantics == 'categorical' and domain_area > 0:
                                 if value not in source_classes:
                                     class_entries += 1
                                 if class_entries > MAX_CLASS_ENTRIES:
                                     raise ValueError('comparison categorical accumulator limit exceeded')
-                                source_classes[value] = source_classes.get(value, 0.)+area
-                        for name, polygons in parts.items():
-                            candidates = trees[name].query(pixel)
-                            counters['candidate_pairs'] += len(candidates)
-                            aggregate['candidate_pairs'] += len(candidates)
-                            if aggregate['candidate_pairs'] > cap['max_candidate_pairs']:
-                                raise ValueError('comparison candidate pair limit exceeded')
-                            for position, index in enumerate(candidates):
-                                if position % 128 == 0:
-                                    checkpoint()
-                                area = float(pixel.intersection(polygons[int(index)]).area)
-                                if area <= 0:
-                                    continue
-                                state = states[name][int(index)]
+                                source_classes[value] = source_classes.get(value, 0.)+domain_area
+
+                        for name, (pair_pixels, pair_cells, pair_areas) in intersection_data.items():
+                            left = int(np.searchsorted(pair_pixels, local_index, side='left'))
+                            right = int(np.searchsorted(pair_pixels, local_index, side='right'))
+                            for pair_index in range(left, right):
+                                area = float(pair_areas[pair_index])
+                                state = states[name][int(pair_cells[pair_index])]
                                 if pass_index:
                                     error = errors[name]
                                     local_scale = max(abs(state['mean']), abs(value))
@@ -386,14 +440,21 @@ def compare_mesh(cells_path, raster_path, *, analysis_crs, cell_size_m=None,
                                     state['mean_scale'] = value_scale
                                 state['area'] = weight
                                 if semantics == 'extensive':
-                                    state['total_sum'].add(value*(area/pixel.area))
+                                    state['total_sum'].add(value*(area/float(pixel_areas[local_index])))
                                 if semantics == 'categorical':
                                     if value not in state['classes']:
                                         class_entries += 1
                                     if class_entries > MAX_CLASS_ENTRIES:
                                         raise ValueError('comparison categorical accumulator limit exceeded')
                                     state['classes'][value] = state['classes'].get(value, 0.)+area
+                observe(phase, counters['windows_scanned'], total_windows,
+                        unit='windows', pass_index=pass_index)
+            if pass_index == 0 and semantics == 'intensive' and not geometry_cache.enabled:
+                cache_counts['status'] = 'recompute_fallback_budget'
+            elif pass_index == 0 and semantics == 'intensive':
+                cache_counts['status'] = 'cached' if geometry_cache.entries else 'empty_geometry'
             passes.append(counters)
+    observe('comparison_publish')
     if support <= 0:
         raise ValueError('comparison has no finite valid common raster support')
     source_total = (source_total_sum.value('comparison source total')
@@ -484,7 +545,12 @@ def compare_mesh(cells_path, raster_path, *, analysis_crs, cell_size_m=None,
             band=band, edge_subdivisions=edge_subdivisions, value_units=value_units,
             raster_resampling='none', area_model='projected planar; cross-CRS edges approximated'),
         workload=dict(hard_limits=cap, max_cells=MAX_MESH_CELLS,
+                      geometry_kernel=selected_kernel,
+                      kernel_selection='bounded benchmark envelope; scalar fallback outside it' if _kernel=='auto' else 'explicit diagnostic override',
                       max_class_entries=MAX_CLASS_ENTRIES, passes=passes,
+                      geometry_weight_cache=dict(**cache_counts,
+                          max_bytes=_geometry_cache_bytes,
+                          semantics='ephemeral pixel-cell intersection areas; overflow triggers scalar recomputation'),
                       aggregate=dict(**aggregate,
                           scope='whole comparison job; intensive mode includes both passes')))
     if baseline_mode == 'native_raster':

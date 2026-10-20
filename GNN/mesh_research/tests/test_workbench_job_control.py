@@ -13,6 +13,27 @@ from gis_mesh_workbench.job_control import JobControl, Cancelled, job_scope, che
 
 
 class JobControlTests(unittest.TestCase):
+    def test_phase_progress_keeps_denominator_and_numerator_consistent_per_pass(self):
+        control=JobControl(clock=lambda:0.)
+        control.stage('values')
+        control.measure(40,100,unit='windows',pass_index=0)
+        control.measure(30,100,unit='windows',pass_index=0)
+        control.measure(40,200,unit='windows',pass_index=0)
+        progress=control.snapshot()['phase_progress']
+        self.assertEqual((progress['completed'],progress['total'],progress['pass_index']),
+                         (40,100,0))
+        self.assertEqual(control.snapshot()['phase_percent'],40)
+
+    def test_phase_progress_resets_only_when_pass_changes(self):
+        control=JobControl(clock=lambda:0.)
+        control.stage('values')
+        control.measure(80,100,unit='windows',pass_index=0)
+        control.measure(5,100,unit='windows',pass_index=1)
+        progress=control.snapshot()['phase_progress']
+        self.assertEqual((progress['completed'],progress['total'],progress['pass_index']),
+                         (5,100,1))
+        self.assertEqual(control.snapshot()['phase_percent'],5)
+
     def test_reported_gmsh_percentages_never_drive_eta_without_denominator(self):
         now=[0.];control=JobControl(clock=lambda:now[0])
         control.log('Info : Meshing 1D...')

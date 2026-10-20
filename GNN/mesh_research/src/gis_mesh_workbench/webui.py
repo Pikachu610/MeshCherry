@@ -1,6 +1,7 @@
 """Session-authenticated loopback UI, restricted local metadata and owned outputs."""
 import argparse
 import copy
+import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -38,7 +39,8 @@ WORKSPACE=(Path(sys.executable).resolve().parent/'workspace'
 ARTIFACTS={'manifest':'manifest.json','qa':'qa.json','cells':'cells.json',
            'attributes':'attributes.json','csv':'attributes.csv','preview':'preview.png',
            'msh':'meshing/mesh.msh','mesh':'meshing/mesh.json','gmsh_log':'meshing/gmsh.log',
-           'comparison':'comparison.json','quality':'quality.json'}
+           'comparison':'comparison.json','comparison_counts':'comparison-counts.json',
+           'quality':'quality.json'}
 
 
 class AccessError(ValueError): pass
@@ -528,6 +530,142 @@ class WorkbenchServer(ThreadingHTTPServer):
             threading.Thread(target=worker,daemon=True).start()
             return dict(job_id=job_id)
 
+    def start_comparison_count(self,data):
+        """Start a separate, cancellable count-only accepted-mesh inventory."""
+        if not isinstance(data,dict):
+            raise ValueError('Comparison count requires a configuration object')
+        mode=data.get('baseline_mode')
+        if mode not in {'target_grid','native_raster'}:
+            raise ValueError('Choose target_grid or native_raster baseline mode')
+        required={'mesh_job_id','baseline_mode','request_id'}
+        if mode=='target_grid': required.add('cell_size_m')
+        else: required.add('raster_path')
+        allowed=required|({'cell_size_m'} if mode=='target_grid' else {'raster_path'})
+        if required-set(data) or set(data)-allowed:
+            raise ValueError('Missing or unsupported comparison count fields')
+        request_id=data['request_id']
+        if not isinstance(request_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,80}',request_id):
+            raise ValueError('Invalid comparison count request ID')
+        if not isinstance(data['mesh_job_id'],str) or not data['mesh_job_id']:
+            raise ValueError('Accepted mesh job ID is required')
+        if mode=='target_grid':
+            size=data['cell_size_m']
+            import math
+            try: size=float(size) if type(size) in (int,float) else math.nan
+            except (OverflowError,ValueError): size=math.nan
+            if not math.isfinite(size) or size<=0:
+                raise ValueError('Target-grid cell size must be finite and positive')
+        else:
+            path=data['raster_path']
+            if not isinstance(path,str) or not path.strip():
+                raise ValueError('Native-raster inventory requires a raster path')
+
+        from .extraction import _digest
+        fingerprint=hashlib.sha256(json.dumps(
+            {key:value for key,value in data.items() if key!='request_id'},
+            sort_keys=True,allow_nan=False).encode()).hexdigest()
+        with self.lock:
+            existing=next(((ident,job) for ident,job in self.jobs.items()
+                if job.get('operation')=='comparison_count' and job.get('request_id')==request_id),None)
+            if existing:
+                if existing[1].get('request_fingerprint')!=fingerprint:
+                    raise ValueError('Request ID already belongs to a different comparison count')
+                return dict(job_id=existing[0],operation='comparison_count',request_id=request_id,
+                    status=existing[1]['status'],mesh_count=copy.deepcopy(existing[1]['mesh_count']),
+                    mesh_sha256=existing[1]['mesh_sha256'])
+            if self.picker_active or self.preflight_inflight or self._active_job_locked():
+                raise ValueError('Hãy chờ tác vụ hiện tại hoàn tất')
+            if len(self.jobs)>=50: raise ValueError('Session job limit reached; restart UI')
+            cells=self.artifact(data['mesh_job_id'],'cells')
+            mesh_manifest=self.artifact(data['mesh_job_id'],'manifest')
+            mesh_manifest_data=_json(mesh_manifest)
+            if mesh_manifest_data.get('operation')!='mesh_only':
+                raise ValueError('Chọn một lưới tam giác đã được chấp nhận')
+            accepted_cells_hash=mesh_manifest_data.get('artifact_hashes',{}).get('cells.json')
+            if not accepted_cells_hash or _digest(cells)!=accepted_cells_hash:
+                raise ValueError('Accepted mesh manifest/hash mismatch')
+            mesh_data=_json(cells)
+            rows=mesh_data.get('cells')
+            if (not isinstance(rows,list) or not 0<len(rows)<=MAX_MESH_CELLS
+                    or any(row.get('kind')!='triangle' for row in rows)):
+                raise ValueError('Chọn lưới tam giác đã được chấp nhận')
+            # Bind the immediate KPI to the exact accepted JSON bytes that
+            # were parsed. The worker repeats this check during computation.
+            if _digest(cells)!=accepted_cells_hash:
+                raise ValueError('Accepted mesh changed while reading its full cell count')
+            mesh_count=dict(count=len(rows),definition='accepted_triangle_cells',unit='cells')
+            raster=None
+            if mode=='native_raster':
+                raster=self.permitted(data['raster_path'])
+                for path in raster_bundle_paths(raster): self.permitted(path)
+            retained={str(cells):accepted_cells_hash,str(mesh_manifest):_digest(mesh_manifest)}
+            job_id=uuid.uuid4().hex
+            manifest=dict(schema_version='mesh-comparison-inventory-manifest-v1',
+                operation='comparison_count',status='running',application_build=identity(),
+                mesh_job_id=data['mesh_job_id'],request_id=request_id,input_hashes=retained,
+                artifact_hashes={})
+            self.jobs[job_id]=dict(status='running',stage='comparison_count',operation='comparison_count',
+                request_id=request_id,request_fingerprint=fingerprint,mesh_count=mesh_count,
+                mesh_sha256=accepted_cells_hash,result=None)
+            control=JobControl(lock=self.lock);self.controls[job_id]=control
+            def progress(phase,completed,total,unit):
+                control.stage(phase)
+                control.measure(completed,total,unit=unit)
+            def worker():
+                output=None;inventory_manifest=copy.deepcopy(manifest)
+                try:
+                    with job_scope(control),authorized_reads(self.permitted):
+                        checkpoint()
+                        from .comparison_inventory import build_inventory
+                        control.stage('verify_accepted_mesh')
+                        if raster is not None:
+                            inventory_manifest['input_hashes'].update({
+                                str(path):_digest(path) for path in raster_bundle_paths(raster)})
+                        mesh_data=_json(cells)
+                        analysis_crs=metric_crs(mesh_data['crs_wkt']).to_wkt()
+                        output=self.permitted(self.output_root/('comparison-count-'+job_id),exists=False,write=True)
+                        output.mkdir(exist_ok=False);control.output=output
+                        inventory=build_inventory(cells,mesh_job_id=data['mesh_job_id'],
+                            baseline_mode=mode,analysis_crs=analysis_crs,
+                            cell_size_m=data.get('cell_size_m'),raster_path=raster,progress=progress)
+                        inventory_retained=dict(retained)
+                        inventory_retained.update({path:digest for path,digest in
+                            inventory_manifest['input_hashes'].items() if path not in inventory_retained})
+                        if any(_digest(Path(path))!=expected for path,expected in inventory_retained.items()):
+                            raise ValueError('Accepted mesh or raster bundle changed during inventory count')
+                        # Keep the sole user-facing artifact atomic and private until
+                        # its manifest is committed and the job reaches terminal pass.
+                        temporary=output/'comparison-counts.tmp'
+                        write_json(temporary,inventory)
+                        checkpoint()
+                        temporary.replace(output/'comparison-counts.json')
+                        inventory_manifest['status']='pass'
+                        inventory_manifest=finalize_manifest(output,inventory_manifest)
+                        result=dict(status=inventory_manifest['status'],output=str(output),
+                            error=inventory_manifest.get('error'))
+                except Cancelled as error:
+                    result=dict(status='cancelled',output=str(output) if output else None,error=str(error))
+                    inventory_manifest.update(status='cancelled',error=str(error),artifact_hashes={},
+                        cancelled_stage=control.phase)
+                except Exception as error:
+                    result=dict(status='fail',output=str(output) if output else None,error=str(error))
+                    inventory_manifest.update(status='fail',error=str(error),artifact_hashes={},
+                        failed_stage=control.phase)
+                with self.lock:
+                    if control.cancel.is_set() and not control.committed:
+                        result.update(status='cancelled',error='Đã dừng theo yêu cầu')
+                        inventory_manifest.update(status='cancelled',error=result['error'],artifact_hashes={},
+                            cancelled_stage=control.phase)
+                    if output and result['status']!='pass':
+                        try: write_json(output/'manifest.json',inventory_manifest)
+                        except OSError as error: result['diagnostic_error']=str(error)
+                    control.finished=control.clock()
+                    self.jobs[job_id].update(status=result['status'],
+                        stage='done' if result['status']=='pass' else result['status'],result=result)
+            threading.Thread(target=worker,daemon=True).start()
+            return dict(job_id=job_id,operation='comparison_count',request_id=request_id,
+                status='running',mesh_count=mesh_count,mesh_sha256=accepted_cells_hash)
+
     def job(self,ident):
         with self.lock:
             if ident not in self.jobs: raise ValueError('Unknown job')
@@ -680,8 +818,12 @@ class Handler(BaseHTTPRequestHandler):
                                  if job['status'] in {'running','stopping'}),None)
                     operation=self.server.jobs[active].get('operation') if active else None
                     request_id=self.server.jobs[active].get('request_id') if active else None
+                    mesh_count=self.server.jobs[active].get('mesh_count') if active else None
+                    mesh_sha256=self.server.jobs[active].get('mesh_sha256') if active else None
                 return self.respond(dict(job_id=active,**({'operation':operation} if operation else {}),
-                    **({'request_id':request_id} if request_id else {})))
+                    **({'request_id':request_id} if request_id else {}),
+                    **({'mesh_count':mesh_count,'mesh_sha256':mesh_sha256}
+                       if operation=='comparison_count' else {})))
             if path=='/api/comparison/status':
                 request_id=query.get('request_id',[''])[0]
                 if not isinstance(request_id,str) or not 8<=len(request_id)<=80:
@@ -690,6 +832,17 @@ class Handler(BaseHTTPRequestHandler):
                     found=next(((ident,job) for ident,job in self.server.jobs.items()
                                 if job.get('operation')=='comparison' and job.get('request_id')==request_id),None)
                     result=dict(job_id=found[0],operation='comparison',status=found[1]['status']) if found else dict(job_id=None)
+                return self.respond(result)
+            if path=='/api/comparison/count/status':
+                request_id=query.get('request_id',[''])[0]
+                if not re.fullmatch(r'[A-Za-z0-9_-]{8,80}',request_id):
+                    raise ValueError('Invalid comparison count request ID')
+                with self.server.lock:
+                    found=next(((ident,job) for ident,job in self.server.jobs.items()
+                        if job.get('operation')=='comparison_count' and job.get('request_id')==request_id),None)
+                    result=(dict(job_id=found[0],operation='comparison_count',request_id=request_id,
+                        status=found[1]['status'],mesh_count=copy.deepcopy(found[1]['mesh_count']),
+                        mesh_sha256=found[1]['mesh_sha256']) if found else dict(job_id=None))
                 return self.respond(result)
             if path=='/api/run/status':
                 request_id=query.get('request_id',[''])[0]
@@ -874,6 +1027,7 @@ class Handler(BaseHTTPRequestHandler):
                 if path=='/api/quality/export':
                     body,mime,filename=quality_export(self.server,data)
                     return self.respond(body,content_type=mime,filename=filename)
+            if path=='/api/comparison/count': return self.respond(self.server.start_comparison_count(data),202)
             if path=='/api/comparison': return self.respond(self.server.start_comparison(data),202)
             if path=='/api/preflight': return self.respond(self.server.validate_form(data))
             if path=='/api/run':

@@ -190,6 +190,47 @@ test('comparison and research tables preserve exact integer node counts',()=>{
   assert.equal(row.children[1].textContent,'13.515');assert.equal(row.children[2].textContent,'13.543');
 });
 
+test('comparison count KPI uses accepted full metadata and target grid count needs no raster',()=>{
+  const t=setup();t.run("meshSnapshot={jobId:'accepted',display:{cell_count:13515},cells:[{cell_id:'preview-only'}]};$('comparison-mode').value='target_grid';$('comparison-size').value='30';$('comparison-raster').value='';renderComparisonCounts();");
+  assert.equal(t.get('comparison-mesh-count').textContent,'13.515');
+  assert.equal(t.get('comparison-baseline-count').textContent,'—');
+  assert.deepEqual(JSON.parse(t.run('JSON.stringify(comparisonCountConfig())')),{mesh_job_id:'accepted',baseline_mode:'target_grid',cell_size_m:30});
+});
+
+test('count-only request publishes geometric inventory independently and never starts raster evaluation',async()=>{
+  const t=setup();t.context.calls=[];
+  t.run(`meshSnapshot={jobId:'accepted',display:{cell_count:13515},cells:[{cell_id:'preview-only'}]};
+    $('comparison-mode').value='native_raster';$('comparison-raster').value='source.tif';busy=false;setBusy=()=>{};
+    api=async(path,body)=>{calls.push({path,body});if(path==='/api/comparison/count')return{job_id:'count-job',operation:'comparison_count',mesh_sha256:'mesh-hash',mesh_count:{count:13515,definition:'accepted_triangle_cells',unit:'cells'}};
+      if(path==='/api/job?id=count-job')return{status:'pass',monitor:{phase:'count_baseline',phase_progress:{completed:12,total:12,unit:'pixels'},elapsed_seconds:4}};
+      if(path.startsWith('/api/artifact?'))return{schema_version:'mesh-comparison-inventory-v1',status:'pass',inventory_id:'count-job',mesh_job_id:'accepted',mesh_count:{count:13515,definition:'accepted_triangle_cells',unit:'cells'},baseline:{mode:'native_raster',count:12345,definition:'geometric_roi_intersecting_source_pixels',unit:'pixels'},difference:{signed_mesh_minus_baseline:1170,reduction_percent:-9.48},provenance:{mesh_sha256:'mesh-hash',valid_data_count:{value:null,status:'not_computed'}}};
+      throw Error('unexpected '+path);};`);
+  await t.run('startComparisonCount()');
+  assert.equal(t.context.calls[0].path,'/api/comparison/count');
+  assert.equal(t.context.calls[0].body.mesh_job_id,'accepted');
+  assert.equal(t.context.calls[0].body.baseline_mode,'native_raster');
+  assert.equal(t.context.calls[0].body.raster_path,'source.tif');
+  assert.equal(typeof t.context.calls[0].body.request_id,'string');
+  assert.equal(t.context.calls.some(call=>call.path==='/api/comparison'),false);
+  assert.equal(t.get('comparison-mesh-count').textContent,'13.515');
+  assert.equal(t.get('comparison-baseline-count').textContent,'12.345');
+  assert.equal(t.get('comparison-count-delta').textContent,'+1.170');
+  assert.match(t.get('comparison-baseline-label').textContent,/Pixel hình học/);
+  assert.match(t.get('comparison-count-status').textContent,/Pixel có dữ liệu hợp lệ theo mask\/NoData: chưa tính/);
+});
+
+test('cancelled raster evaluation retains the prior report and count inventory',async()=>{
+  const t=setup();t.run(`meshSnapshot={jobId:'accepted',display:{cell_count:8},cells:[],crs:'EPSG:32649'};busy=false;setBusy=()=>{};
+    comparisonReport={prior:true};comparisonInventory={baseline:{count:4},mesh_count:{count:8}};comparisonInventoryKey='keep';$('comparison-result').hidden=false;
+    $('comparison-mode').value='native_raster';$('comparison-raster').value='source.tif';$('comparison-band').value='1';$('comparison-units').value='m';$('comparison-semantics').value='intensive';
+    api=async(path)=>path==='/api/comparison'?{job_id:'evaluation-job'}:path==='/api/job?id=evaluation-job'?{status:'cancelled',monitor:{elapsed_seconds:2}}:(()=>{throw Error('must not fetch partial report')})();`);
+  await t.run('startComparison()');
+  assert.equal(t.run('comparisonReport.prior'),true);
+  assert.equal(t.run('comparisonInventory.baseline.count'),4);
+  assert.equal(t.get('comparison-result').hidden,false);
+  assert.match(t.get('comparison-status').textContent,/Đã dừng đánh giá/);
+});
+
 test('native raster comparison is explicit, uses the accepted mesh, and does not send a resampling size',()=>{
   const t=setup();t.run("meshSnapshot={jobId:'accepted-mesh',cells:[{cell_id:'a'}]};jobId='later-extract'");
   for(const [id,value] of Object.entries({'comparison-mode':'native_raster','comparison-raster':'field.asc','comparison-band':'2','comparison-size':'50','comparison-semantics':'extensive','comparison-units':'m3'}))t.get(id).value=value;

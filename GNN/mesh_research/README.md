@@ -1,5 +1,41 @@
 # Mesh research pipeline
 
+## Comparison: counts before raster evaluation
+
+The comparison workspace displays the accepted triangle-cell graph-node count
+first. **Count reference cells** runs an independent, cancellable inventory job:
+target-grid counts need only a cell size, while native-raster counts use actual
+pixel footprints intersecting the accepted mesh domain. Disconnected clipped
+target-square pieces are separate control volumes; a source pixel is counted
+once even when its clip has several pieces. Native geometric counts do not
+claim to be valid-data/NoData counts.
+
+**Evaluate raster error** is a separate explicit action. Phase-local completed
+work, elapsed time and Stop remain visible; an ETA is shown only from stable
+measured samples. Counts and earlier successful reports remain available if a
+new attempt fails or is cancelled. Counts measure graph size, not GNN accuracy.
+Stopping is cooperative: an in-progress file parse or individual GEOS operation
+must return before its next cancellation checkpoint. The UI keeps a pending-stop
+message until confirmed termination; no near-limit cancellation latency is
+certified. Cross-CRS pixel edges use eight-segment approximation, recorded in
+the inventory provenance; native counts follow that declared footprint model.
+
+Comparison geometry uses bounded batches and a run-local byte-capped cache of
+intersection weights. The intensive second pass remains: MAE, RMSE and bias
+retain their area-weighted definitions. Cache overflow recomputes geometry;
+no persistent cache or project-format migration is introduced. Partial raster
+coverage leaves unsupported geometric cells in the counts and excludes them
+from raster statistics rather than inserting zero observations.
+Automatic vector selection is limited to intensive target-grid comparisons of
+same-CRS north-up rasters up to 65,536 pixels, 2,048 triangles and 1,024 target
+cells. Other workloads use the scalar path; vector selection remains available
+as an internal diagnostic override. This bound is not a general speed guarantee
+or near-limit memory/cancellation certification.
+
+The count API is additive (`POST /api/comparison/count` and request-ID status
+recovery); the existing full comparison endpoint remains available. Numerical,
+benchmark, browser and external-review evidence are separate acceptance gates.
+
 ## 3.2 RC5 compact, readable workspaces
 
 This UI pass follows an independently reviewed design: essential source controls

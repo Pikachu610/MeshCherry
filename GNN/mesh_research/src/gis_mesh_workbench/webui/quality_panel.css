@@ -49,3 +49,5 @@
   .meshcherry-quality-panel .mcp-section { padding: 10px; }
 }
 .meshcherry-quality-panel .mcp-config{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,190px),1fr));align-items:end;gap:10px}.meshcherry-quality-panel .mcp-config h3{grid-column:1/-1;width:auto}.meshcherry-quality-panel .mcp-field{min-width:0;width:100%;flex:initial;gap:4px}.meshcherry-quality-panel .mcp-field span{font-size:14px;line-height:1.35}.meshcherry-quality-panel .mcp-field input,.meshcherry-quality-panel .mcp-field select{padding:7px 9px;font-size:14px;font-family:inherit}.meshcherry-quality-panel .mcp-field small{font-size:12px}.meshcherry-quality-panel .mcp-primary{background:var(--mcp-cherry);border-color:var(--mcp-cherry);color:#fff;font-weight:700}.meshcherry-quality-panel .mcp-primary:disabled{background:#e9eef3;border-color:#cbd5df;color:#30465e}
+.meshcherry-quality-panel .mcp-actions>.mcp-primary{min-height:48px;font-size:16px;font-weight:700}
+@media(max-width:680px){.meshcherry-quality-panel .mcp-actions>.mcp-primary{width:100%}}

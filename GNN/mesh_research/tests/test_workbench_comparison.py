@@ -12,7 +12,7 @@ import rasterio
 from shapely.geometry import box
 
 from gis_mesh_workbench.comparison import compare_mesh, _categorical_metrics, _square_partition
-from gis_mesh_workbench.indexed_extraction import CEILINGS, footprint
+from gis_mesh_workbench.indexed_extraction import CEILINGS
 from gis_mesh_workbench.extraction import Cell, _digest
 from gis_mesh_workbench.job_control import Cancelled, JobControl, job_scope
 from gis_mesh_workbench.mesh_workflow import geometry_digest
@@ -55,6 +55,22 @@ class ComparisonTests(unittest.TestCase):
         size = kwargs.pop('cell_size_m', None if baseline_mode == 'native_raster' else 1)
         return compare_mesh(self.mesh, self.raster, analysis_crs=self.crs,
                             cell_size_m=size, value_units='m', **kwargs)
+
+    def test_automatic_vector_selection_is_bounded_and_falls_back(self):
+        from types import SimpleNamespace
+        from gis_mesh_workbench.comparison_kernel import automatic_kernel
+        source=SimpleNamespace(crs=self.crs,transform=Affine(1,0,0,0,-1,0),width=256,height=256)
+        parts={'structured':[None]*1024,'unstructured':[None]*2048}
+        self.assertEqual(automatic_kernel(source,self.crs,'intensive','target_grid',parts),'vectorized')
+        for semantics,mode,target in (('extensive','target_grid',self.crs),
+                ('intensive','native_raster',self.crs),('intensive','target_grid','EPSG:4326')):
+            self.assertEqual(automatic_kernel(source,target,semantics,mode,parts),'scalar')
+        source.width=257
+        self.assertEqual(automatic_kernel(source,self.crs,'intensive','target_grid',parts),'scalar')
+        source.width=256;source.transform=Affine(1,.1,0,0,-1,0)
+        self.assertEqual(automatic_kernel(source,self.crs,'intensive','target_grid',parts),'scalar')
+        source.transform=Affine(1,0,0,0,-1,0);parts['unstructured'].append(None)
+        self.assertEqual(automatic_kernel(source,self.crs,'intensive','target_grid',parts),'scalar')
 
     def test_intensive_comparison_measured_errors_and_identity(self):
         before = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in self.root.iterdir()}
@@ -124,6 +140,144 @@ class ComparisonTests(unittest.TestCase):
         self.write([[10, 30], [10, 17]], [[0, 0], [0, 0]])
         with self.assertRaisesRegex(ValueError, 'no finite valid common raster support'):
             self.compare(baseline_mode='native_raster')
+
+    def test_vectorized_and_scalar_kernels_match_with_cache_reuse_and_fallback(self):
+        for semantics in ('intensive', 'extensive', 'categorical'):
+            with self.subTest(semantics=semantics):
+                scalar = self.compare(semantics=semantics, _kernel='scalar')
+                vector = self.compare(semantics=semantics, _kernel='vectorized')
+                fallback = self.compare(semantics=semantics, _kernel='vectorized',
+                                        _geometry_cache_bytes=0)
+                for key in ('common_support_area_m2', 'structured', 'unstructured',
+                            'graph_node_delta', 'node_reduction_percent'):
+                    if key in ('structured', 'unstructured'):
+                        self.assertEqual(scalar[key]['node_count'], vector[key]['node_count'])
+                        self.assertAlmostEqual(scalar[key]['valid_support_area_m2'],
+                                               vector[key]['valid_support_area_m2'], places=12)
+                    else:
+                        self.assertAlmostEqual(scalar[key], vector[key], places=12)
+                        self.assertAlmostEqual(vector[key], fallback[key], places=12)
+                self.assertEqual(scalar['metrics'], vector['metrics'])
+                self.assertEqual(vector['metrics'], fallback['metrics'])
+                if semantics == 'intensive':
+                    self.assertEqual(vector['workload']['geometry_weight_cache']['status'], 'cached')
+                    self.assertEqual(vector['workload']['geometry_weight_cache']['hits'], 1)
+                    self.assertEqual(vector['workload']['geometry_weight_cache']['misses'], 1)
+                    self.assertEqual(fallback['workload']['geometry_weight_cache']['status'],
+                                     'recompute_fallback_budget')
+                    self.assertEqual(fallback['workload']['geometry_weight_cache']['hits'], 0)
+                    self.assertEqual(fallback['workload']['geometry_weight_cache']['misses'], 2)
+                else:
+                    self.assertEqual(vector['workload']['geometry_weight_cache']['status'],
+                                     'not_applicable')
+
+    def test_geometry_batch_size_is_adaptive_and_candidate_bounded(self):
+        from gis_mesh_workbench.comparison_kernel import (
+            MAX_BATCH_CANDIDATE_PAIRS, CHUNK_PIXELS, geometry_chunk_pixels,
+        )
+        class Sized:
+            def __init__(self, size): self.size = size
+            def __len__(self): return self.size
+        ordinary = {'structured': Sized(1000), 'unstructured': Sized(1000),
+                    '__domain__': Sized(1)}
+        largest = {'structured': Sized(100_000), 'unstructured': Sized(100_000),
+                    '__domain__': Sized(1)}
+        self.assertEqual(geometry_chunk_pixels(ordinary), CHUNK_PIXELS)
+        self.assertEqual(geometry_chunk_pixels(largest), 4)
+        for parts in (ordinary, largest):
+            batch = geometry_chunk_pixels(parts)
+            cells = sum(len(value) for name, value in parts.items() if name != '__domain__')
+            self.assertLessEqual(batch*cells, MAX_BATCH_CANDIDATE_PAIRS)
+
+    def test_polygon_object_arrays_are_reused_across_geometry_batches(self):
+        import gis_mesh_workbench.comparison as comparison
+        self.write(np.full((32, 32), 17.))
+        original = comparison.geometry_batch
+        original_observe = comparison.observe
+        observed = []
+        progress = []
+        def capture_arrays(*args, **kwargs):
+            observed.append(kwargs['polygon_arrays'])
+            return original(*args, **kwargs)
+        def capture_progress(*args, **kwargs):
+            progress.append((args, kwargs))
+            return original_observe(*args, **kwargs)
+        control = JobControl()
+        with job_scope(control), \
+                patch('gis_mesh_workbench.comparison.geometry_batch', capture_arrays), \
+                patch('gis_mesh_workbench.comparison.observe', capture_progress):
+            result = self.compare()
+        self.assertGreater(len(observed), 1)
+        self.assertTrue(all(value is observed[0] for value in observed))
+        self.assertEqual(result['workload']['geometry_weight_cache']['misses'], len(observed))
+        self.assertEqual(result['workload']['aggregate']['windows_scanned'],
+                         sum(item['windows_scanned'] for item in result['workload']['passes']))
+        for phase in ('values_pass1', 'error_pass2'):
+            samples = [(args, kwargs) for args, kwargs in progress if args and args[0] == phase]
+            self.assertTrue(samples)
+            self.assertEqual(samples[-1][0][2], samples[-1][0][1])
+
+    def test_scalar_and_vector_kernels_reject_nonfinite_intersection_area(self):
+        from gis_mesh_workbench.comparison_kernel import _pair_intersections
+        from shapely import box as shapely_box
+        from shapely.strtree import STRtree
+        pixel = shapely_box(0, 0, 1, 1)
+        polygons = [shapely_box(0, 0, 1, 1)]
+        tree = STRtree(polygons)
+        class BadIntersection:
+            area = np.inf
+        class BadPixel:
+            def intersection(self, other): return BadIntersection()
+        class SingleCandidateTree:
+            def query(self, geometry): return np.array([0], dtype=np.int64)
+        with self.assertRaisesRegex(ValueError, 'intersection area is nonfinite'):
+            _pair_intersections(np.asarray([BadPixel()], dtype=object), polygons,
+                                SingleCandidateTree(), 'scalar')
+        with patch('gis_mesh_workbench.comparison_kernel.shapely.area',
+                   return_value=np.array([np.inf])):
+            with self.assertRaisesRegex(ValueError, 'intersection area is nonfinite'):
+                _pair_intersections(np.asarray([pixel], dtype=object), polygons,
+                                    tree, 'vectorized')
+
+    def test_scalar_candidate_loop_checks_cancellation_every_128_pairs(self):
+        from gis_mesh_workbench.comparison_kernel import _pair_intersections
+        class Intersection:
+            area = 1.
+        class Pixel:
+            def intersection(self, other): return Intersection()
+        class CandidateTree:
+            def query(self, geometry): return np.arange(300, dtype=np.int64)
+        checks = 0
+        def stop_on_third_check():
+            nonlocal checks
+            checks += 1
+            if checks == 3:
+                raise Cancelled()
+        with patch('gis_mesh_workbench.comparison_kernel.checkpoint', stop_on_third_check), \
+                self.assertRaises(Cancelled):
+            _pair_intersections(np.asarray([Pixel()], dtype=object), [None]*300,
+                                CandidateTree(), 'scalar')
+        self.assertEqual(checks, 3)
+
+    def test_vectorized_kernel_preserves_large_uint64_categories(self):
+        low, high = 2**53, 2**53+1
+        with rasterio.open(self.raster, 'w', driver='GTiff', width=2, height=2,
+            count=1, dtype='uint64', crs=self.crs,
+            transform=Affine(1, 0, 500000, 0, -1, 1000002)) as dst:
+            dst.write(np.array([[low, high], [low, high]], dtype='uint64'), 1)
+        scalar = self.compare(semantics='categorical', _kernel='scalar')
+        vector = self.compare(semantics='categorical', _kernel='vectorized')
+        self.assertEqual(scalar['metrics'], vector['metrics'])
+
+    def test_vectorized_geometry_batch_rejects_unbounded_input(self):
+        from gis_mesh_workbench.comparison_kernel import geometry_batch, CHUNK_PIXELS
+        from shapely.strtree import STRtree
+        with rasterio.open(self.raster) as src:
+            polygons = [box(500000, 1000000, 500002, 1000002)]
+            with self.assertRaisesRegex(ValueError, 'fixed pixel bound'):
+                geometry_batch(src, src.crs, np.arange(CHUNK_PIXELS+1),
+                    np.zeros(CHUNK_PIXELS+1), 8, {'structured': polygons, '__domain__': polygons[0]},
+                    {'structured': STRtree(polygons)})
 
     def test_native_raster_baseline_counts_roi_pixels_and_reports_identity(self):
         self.write([[10, 30], [10, 30], [90, 90], [90, 90]])
@@ -434,11 +588,12 @@ class ComparisonTests(unittest.TestCase):
 
     def test_cancel_after_source_read_and_changed_mesh_guard(self):
         control = JobControl()
-        def stop_during_pixel(*args, **kwargs):
-            result = footprint(*args, **kwargs)
+        from gis_mesh_workbench.comparison import geometry_batch
+        def stop_during_batch(*args, **kwargs):
+            result = geometry_batch(*args, **kwargs)
             control.request_cancel()
             return result
-        with job_scope(control), patch('gis_mesh_workbench.comparison.footprint', stop_during_pixel):
+        with job_scope(control), patch('gis_mesh_workbench.comparison.geometry_batch', stop_during_batch):
             with self.assertRaises(Cancelled): self.compare()
         changed = False
         def change_frozen_input(*args, **kwargs):
@@ -446,8 +601,8 @@ class ComparisonTests(unittest.TestCase):
             if not changed:
                 self.mesh.write_text(self.mesh.read_text()+'\n')
                 changed = True
-            return footprint(*args, **kwargs)
-        with patch('gis_mesh_workbench.comparison.footprint', change_frozen_input):
+            return geometry_batch(*args, **kwargs)
+        with patch('gis_mesh_workbench.comparison.geometry_batch', change_frozen_input):
             with self.assertRaisesRegex(ValueError, 'input changed'): self.compare()
 
     def test_cross_crs_uses_densified_footprints_and_conservative_reads(self):
