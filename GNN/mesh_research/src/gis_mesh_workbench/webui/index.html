@@ -25,13 +25,14 @@
 <section class="card wizard-panel" data-panel="1"><h2><span class="step">01</span> Dữ liệu đầu vào</h2>
 <button id="try-sample" class="sample-choice" type="button" hidden>🍒 Thử mẫu 10 / 30 <small>Hai pixel nhân tạo · chỉ dùng trong hướng dẫn</small></button>
 <label for="gmsh-domain">Ranh giới miền chia lưới</label><select id="gmsh-domain"><option value="raster" selected>Biên GeoTIFF / ASC</option><option value="rectangle">Nhập miền chữ nhật</option><option value="shapefile">Shapefile (.shp + .shx + .dbf + .prj)</option></select>
-<div id="boundary-options" hidden><label for="boundary-path">Ranh giới Shapefile</label><div class="input-action"><input id="boundary-path" placeholder="Chọn tệp .shp"><button type="button" data-pick="boundary-path">Chọn Shapefile…</button></div><p class="tiny">Chọn .shp; tự đọc .shx, .dbf, .prj cùng tên và cùng thư mục.</p><button type="button" id="inspect-boundary">Kiểm tra ranh giới</button><div id="boundary-info" class="info" role="status">Chưa chọn ranh giới.</div></div>
+<div id="boundary-options" hidden><label for="boundary-path">Ranh giới Shapefile</label><div class="input-action"><input id="boundary-path" placeholder="Chọn tệp .shp"><button type="button" data-pick="boundary-path">Chọn Shapefile…</button></div><p class="tiny">Bộ tệp cùng tên: .shp, .shx, .dbf, .prj.</p><button type="button" id="inspect-boundary">Kiểm tra ranh giới</button></div>
 <section id="roi-reference-strip" class="roi-reference-strip" hidden aria-label="Raster tham chiếu độ phân giải"><strong>Độ phân giải raster tham chiếu</strong><div id="roi-reference-info" class="roi-reference-info" role="status">Chưa chọn raster tham chiếu</div><p class="tiny">Chỉ dùng làm tham chiếu; không xác định kích thước lưới đích.</p></section>
 <div id="roi-raster-options"><label id="raster-label" for="raster">GeoTIFF / ASC · biên ROI</label><div class="input-action"><input id="raster" placeholder="Chọn tệp .tif, .tiff hoặc .asc"><button type="button" data-pick="raster" aria-label="Chọn GeoTIFF / ASC">Chọn GeoTIFF / ASC…</button></div>
 <div class="input-action"><button type="button" id="inspect-source">Đọc thông tin nguồn</button><button type="button" id="use-crs" disabled>Dùng CRS nguồn</button></div>
 <div id="source-info" class="info muted"><div id="source-summary" class="roi-source-summary">Chưa chọn raster.</div><p id="source-warning" class="field-error" role="alert" hidden></p><details id="source-diagnostics"><summary>Thông tin nguồn đầy đủ</summary><div id="source-diagnostics-content"></div></details></div>
 </div><label class="required-label" for="crs">CRS tính toán · mét</label><input id="crs" value="EPSG:32649">
 <div class="actions roi-primary-actions"><button id="source-next" type="button" class="primary">Tiếp: chọn lưới →</button></div>
+<div id="boundary-info" class="info" role="status" hidden>Chưa chọn ranh giới.</div>
 <details><summary>Metadata GeoTIFF / ASC nâng cao</summary>
 <div class="two"><div><label for="band">Band</label><input id="band" type="number" value="1" min="1"></div></div>
 <div class="two" hidden><div><label for="semantics">Loại thuộc tính</label><select id="semantics"><option value="intensive">Intensive · trung bình</option><option value="extensive">Extensive · tổng/pixel</option><option value="categorical">Categorical · tỷ lệ lớp</option></select></div><div><label for="units">Đơn vị giá trị</label><input id="units" value="m" placeholder="Khai báo đúng nguồn"></div></div>
@@ -39,11 +40,11 @@
 </details>
 <section id="recent-files" class="roi-recent-history" hidden aria-label="Tệp gần đây"><div class="actions"><h3>Tệp gần đây</h3><button type="button" id="recent-clear">Xóa lịch sử</button></div><div id="recent-list"></div><details id="recent-history" hidden><summary>Xem lịch sử đầy đủ</summary><div id="recent-history-list"></div></details></section>
 </section>
-<section class="card wizard-panel" data-panel="2" hidden><h2><span class="step">02</span> Chọn cách tạo ô lưới</h2>
+<section class="card wizard-panel" data-panel="2" hidden><h2><span class="step">02</span> Cấu hình lưới</h2>
 <div id="mesh-field-error" class="info error" role="alert" hidden></div>
-<!-- Internal selection state; the three choice cards are the visible control. -->
-<select id="mode" hidden aria-hidden="true" tabindex="-1"><option value="structured_grid">Lưới vuông / chữ nhật</option><option value="gmsh_generated">Tạo mesh tam giác bằng Gmsh</option><option value="mesh_artifact">Nhập mesh tam giác đã có</option></select>
-<div class="mode-choices" role="group" aria-label="Chọn loại lưới"><button type="button" data-mode="structured_grid">▦ Lưới vuông / chữ nhật<small>Kích thước ô theo mét</small></button><button type="button" data-mode="gmsh_generated">△ Tạo mesh bằng Gmsh<small>Tạo mới từ miền chọn · đều hoặc DEM relief</small></button><button type="button" data-mode="mesh_artifact">△ Mesh tam giác có sẵn<small>Tùy chọn phụ · nhập JSON đã chuẩn hóa</small></button></div>
+<!-- Retained for old projects and the tutorial; new meshes use Gmsh. -->
+<select id="mode" hidden aria-hidden="true" tabindex="-1"><option value="structured_grid">Lưới vuông / chữ nhật</option><option value="gmsh_generated" selected>Tạo mesh tam giác bằng Gmsh</option><option value="mesh_artifact">Nhập mesh tam giác đã có</option></select>
+<p id="mesh-method-label" class="mesh-method-label" role="status">Tạo lưới tam giác bằng Gmsh</p>
 <div id="domain-options"><details open><summary>Miền chữ nhật · tọa độ X,Y theo CRS tính toán (m)</summary><div class="two"><div><label for="west">West / X min</label><input id="west" type="number" value="500000" step="any"></div><div><label for="south">South / Y min</label><input id="south" type="number" value="1000000" step="any"></div><div><label for="east">East / X max</label><input id="east" type="number" value="500002" step="any"></div><div><label for="north">North / Y max</label><input id="north" type="number" value="1000001" step="any"></div></div></details>
 <button type="button" id="use-bounds" disabled>Dùng bounds raster (cùng CRS)</button>
 </div><div id="grid-options"><label for="policy">Ô ở biên</label><select id="policy"><option value="strict">Strict · extent chia hết</option><option value="clip">Clip · thu hẹp ô cuối</option></select>

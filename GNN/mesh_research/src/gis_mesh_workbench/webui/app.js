@@ -459,6 +459,8 @@ function setWorkspace(value){
   showResultTab('log');markWorkspace(value);
 }
 function setupWorkspaceNavigation(){
+  const importMesh=document.createElement('button');importMesh.type='button';importMesh.id='menu-import-mesh';importMesh.textContent='Nhập mesh JSON…';
+  importMesh.onclick=()=>{if(busy||qualityBusy||batchJobId||batchStartUncertain||batchRecoveryBlocked||extractChecking)return;document.querySelector('.app-menubar details').open=false;openPicker(document.querySelector('[data-pick="mesh"]'));};$('project-save').after(importMesh);
   for(const button of document.querySelectorAll('button[data-workspace]'))button.addEventListener('click',()=>setWorkspace(button.dataset.workspace));
   const modeNav=document.createElement('div');modeNav.className='extract-mode-nav';modeNav.setAttribute('role','group');modeNav.setAttribute('aria-label','Chọn cách trích thuộc tính');
   for(const [mode,label] of [['single','Một raster'],['batch','Nhiều raster']]){const button=document.createElement('button');button.type='button';button.dataset.extractMode=mode;button.textContent=label;button.setAttribute('aria-pressed',String((document.body.dataset.extractMode||'single')===mode));button.onclick=()=>setExtractMode(mode);modeNav.append(button);}
@@ -654,7 +656,7 @@ function setQualityBusy(value){
   if(Boolean(value)===qualityBusy)return;qualityBusy=Boolean(value);
   if(qualityBusy){qualityDisabledBefore=qualityControls().map(node=>[node,node.disabled]);for(const [node] of qualityDisabledBefore)node.disabled=true;}
   else{for(const [node,disabled] of qualityDisabledBefore)if(node.isConnected)node.disabled=disabled;qualityDisabledBefore=[];}
-  document.body.dataset.qualityBusy=String(qualityBusy);
+  document.body.dataset.qualityBusy=String(qualityBusy);syncMeshImportControl();
 }
 function setQualityMesh(mesh){
   if(!window.MeshCherryQualityPanel||!window.MeshCherryQualityBridge)return;
@@ -715,7 +717,7 @@ function startAnother(){
   clearInputPreview();
   sourceRequest++;boundaryRequest++;exitTutorial();tutorialClicks.clear();visitedStages.clear();
   source=null;plannedSource=null;plannedRequest++;$('planned-raster').value='';meshSnapshot=null;clearAcceptedMesh();extractMode=false;invalidate();resetResult();
-  $('raster').value='';$('mesh').value='';$('boundary-path').value='';$('gmsh-domain').value='rectangle';
+  $('raster').value='';$('mesh').value='';$('boundary-path').value='';$('gmsh-domain').value='raster';$('mode').value='gmsh_generated';
   $('source-info').className='info muted';$('boundary-info').className='info';
   $('source-summary').textContent='Chọn GeoTIFF / ASC của bạn.';$('source-diagnostics-content').replaceChildren();$('source-diagnostics').open=false;$('source-warning').hidden=true;$('source-warning').textContent='';$('boundary-info').textContent='Chưa đọc ranh giới.';
   mode();helpers();stage(1);
@@ -733,8 +735,10 @@ function invalidate(){clearComparison();if(!preserveAcceptedDuringRun){meshSnaps
 function mode(){
   if(previewKey&&previewKey!==previewIdentity())clearInputPreview();
   const domain=$('gmsh-domain').value,shp=domain==='shapefile';
+  $('boundary-info').hidden=!shp;
   if(shp)$('mode').value='gmsh_generated';
   const value=$('mode').value,sf1=value==='gmsh_generated'&&$('gmsh-sizing').value==='sf1_relief',relief=value==='gmsh_generated'&&['relief','sf1_relief'].includes($('gmsh-sizing').value);
+  $('mesh-method-label').textContent=value==='gmsh_generated'?'Tạo lưới tam giác bằng Gmsh':value==='mesh_artifact'?'Mesh tam giác nhập từ JSON':'Lưới vuông · cấu hình đã lưu / hướng dẫn';
   const advancedEligible=value==='gmsh_generated'&&['uniform','relief'].includes($('gmsh-sizing').value);
   $('gmsh-advanced').hidden=!advancedEligible;
   for(const id of ['gmsh-algorithm','gmsh-smoothing','gmsh-optimize'])$(id).disabled=!advancedEligible||!gmshAdvancedEnabled;
@@ -966,14 +970,28 @@ async function inspectSource(){
     helpers();renderResolution();await refreshRecent();await loadInputPreview();return meta;
   }catch(error){if(!current())return null;$('source-info').className='info error';$('source-summary').textContent=error.message;$('source-warning').hidden=true;throw error;}
 }
+function renderBoundaryInfo(report,crs){
+  const host=$('boundary-info');host.replaceChildren();
+  const status=document.createElement('p');status.className='boundary-status';status.textContent='✓ Hình học hợp lệ';host.append(status);
+  const sameCRS=report.source_crs===crs,sameVertices=report.source_vertices===report.transformed_vertices;
+  const rows=[...(sameCRS?[['CRS',crs]]:[['CRS nguồn',report.source_crs],['CRS tính toán',crs]]),
+    ...(sameVertices?[['Điểm biên',report.source_vertices.toLocaleString('vi-VN')]]:[['Điểm biên nguồn',report.source_vertices.toLocaleString('vi-VN')],['Điểm sau đổi CRS',report.transformed_vertices.toLocaleString('vi-VN')]]),
+    ['Diện tích',report.area_m2.toLocaleString('vi-VN')+' m²'],['Vùng / lỗ',`${report.components} / ${report.holes}`]];
+  detailRows(host,rows);
+  const details=document.createElement('details'),summary=document.createElement('summary');details.className='boundary-diagnostics';summary.textContent='Chi tiết ranh giới';details.append(summary);
+  detailRows(details,[['Xử lý đường biên','Giữ nguyên · không giản lược'],['Đổi CRS',`${report.transform_subdivisions} đoạn/cạnh`],['X min → max',`${report.bounds[0]} → ${report.bounds[2]} m`],['Y min → max',`${report.bounds[1]} → ${report.bounds[3]} m`]]);host.append(details);
+  for(const message of report.warnings||[]){const note=document.createElement('p');note.className='boundary-warning';note.setAttribute('role','status');note.textContent=message;host.append(note);}
+}
 async function inspectBoundary(){
   const request=++boundaryRequest;
+  const domain=$('gmsh-domain').value,requestedRevision=revision;
   const path=$('boundary-path').value.trim(),crs=$('crs').value.trim();$('boundary-info').textContent='Đang đọc bộ SHP và chuyển CRS…';
-  const current=()=>request===boundaryRequest&&path===$('boundary-path').value.trim()&&crs===$('crs').value.trim();
+  const current=(expectedRevision=requestedRevision)=>request===boundaryRequest&&domain===$('gmsh-domain').value&&expectedRevision===revision&&path===$('boundary-path').value.trim()&&crs===$('crs').value.trim();
   try{const report=await api('/api/boundary',{path,analysis_crs:crs});if(!current())return null;
-    $('boundary-info').replaceChildren();detailRows($('boundary-info'),[['Trạng thái','✓ Hình học hợp lệ'],['CRS nguồn',report.source_crs],['CRS tính toán',crs],['Số điểm biên nguồn',report.source_vertices.toLocaleString('vi-VN')],['Số điểm sau đổi CRS',report.transformed_vertices.toLocaleString('vi-VN')],['Xử lý đường biên','Giữ nguyên · không giản lược'],['Diện tích',report.area_m2.toLocaleString('vi-VN')+' m²'],['Số vùng / lỗ',`${report.components} / ${report.holes}`],['Đổi CRS',`${report.transform_subdivisions} đoạn/cạnh; không đổi nhãn CRS`],['X min → max',`${report.bounds[0]} → ${report.bounds[2]} m`],['Y min → max',`${report.bounds[1]} → ${report.bounds[3]} m`]]);
-    for(const message of report.warnings||[]){const note=document.createElement('p');note.className='boundary-warning';note.setAttribute('role','status');note.textContent=message;$('boundary-info').append(note);}
-    ['west','south','east','north'].forEach((id,i)=>$(id).value=report.bounds[i]);invalidate();await refreshRecent();await loadInputPreview();return report;
+    renderBoundaryInfo(report,crs);
+    ['west','south','east','north'].forEach((id,i)=>$(id).value=report.bounds[i]);invalidate();const committedRevision=revision;
+    await refreshRecent();if(!current(committedRevision))return null;
+    await loadInputPreview();if(!current(committedRevision))return null;return report;
   }catch(error){if(!current())return null;$('boundary-info').textContent=error.message;throw error;}
 }
 function svgElement(name,attributes){const element=document.createElementNS('http://www.w3.org/2000/svg',name);for(const [key,value] of Object.entries(attributes))element.setAttribute(key,String(value));return element;}
@@ -1316,21 +1334,29 @@ function invalidateExtraction(){
 
 function acceptPickerPath(target,path){$(target).value=path;clearSourceFieldError(target);if(target==='comparison-raster'){invalidateComparisonInventory();return;}if(target==='batch-raster')return;if(target==='extract-raster')invalidateExtraction();else invalidate();}
 async function acceptSelectedSource(target,path){
+  if(target==='mesh'){
+    if(busy||qualityBusy||batchJobId||batchStartUncertain||batchRecoveryBlocked||extractChecking)throw Error('Hãy chờ tác vụ hiện tại kết thúc trước khi nhập mesh.');
+    if(meshSnapshot){preserveAcceptedDuringRun=true;showRemeshDraftButton();}
+  }
   acceptPickerPath(target,path);
   if(target==='dem-raster')await loadDemPreview();
   if(['raster','boundary-path','mesh'].includes(target)){
     exitTutorial();
     if(target==='boundary-path'){$('mode').value='gmsh_generated';$('gmsh-domain').value='shapefile';}
-    else if(target==='raster'){$('gmsh-domain').value='raster';}
-    else $('mode').value='mesh_artifact';
-    mode();stage(1,false);
+    else if(target==='raster'){$('gmsh-domain').value='raster';$('mode').value='gmsh_generated';}
+    else {$('mode').value='mesh_artifact';$('gmsh-domain').value='rectangle';}
+    mode();stage(target==='mesh'?2:1,false);
   }
   if(target==='raster')await inspectSource();
   if(target==='boundary-path')await inspectBoundary();
   if(target==='planned-raster')await inspectPlanned();
   await refreshRecent();
 }
+function syncMeshImportControl(){
+  if($('menu-import-mesh'))$('menu-import-mesh').disabled=busy||qualityBusy||!!batchJobId||batchStartUncertain||batchRecoveryBlocked||extractChecking;
+}
 function syncDocumentControls(){
+  syncMeshImportControl();
   if($('project-open'))$('project-open').disabled=busy;
   if($('project-save'))$('project-save').disabled=busy||!meshSnapshot;
   if($('export-run'))$('export-run').disabled=busy||!jobId||!displayCellCount()||terminalArtifactIncompleteJobId===jobId;
@@ -1724,8 +1750,8 @@ const appMenu=document.querySelector('.app-menubar'),appMenuItems=[...document.q
 for(const item of appMenuItems){item.addEventListener('toggle',()=>{if(item.open)for(const other of appMenuItems)if(other!==item)other.open=false;});item.addEventListener('click',event=>{if(event.target.closest('button'))item.open=false;});}
 document.addEventListener('pointerdown',event=>{if(!appMenu?.contains(event.target))for(const item of appMenuItems)item.open=false;});
 document.addEventListener('keydown',event=>{if(event.key!=='Escape')return;const active=appMenuItems.find(item=>item.open);if(!active)return;event.preventDefault();active.open=false;active.querySelector('summary')?.focus();});
-for(const button of document.querySelectorAll('[data-pick]'))button.onclick=async()=>{
-  if(busy||!bootstrap)return;
+async function openPicker(button){
+  if(busy||qualityBusy||!bootstrap)return;
   pickerTarget=button.dataset.pick;
   if(bootstrap.native_picker){
     button.disabled=true;
@@ -1736,12 +1762,13 @@ for(const button of document.querySelectorAll('[data-pick]'))button.onclick=asyn
       if(target==='batch-raster'){enqueueBatchPaths(selected.paths||[]);return;}
       await acceptSelectedSource(target,selected.path);
       if(kind==='gmsh'){gmshRequest++;gmshVerified=null;gmshFeedback('Đã chọn gmsh.exe. Chưa kiểm tra phiên bản. Bấm Kiểm tra & lưu để xác nhận.');}
-    }catch(error){toast(error.message);}finally{button.disabled=busy;}
+    }catch(error){toast(error.message);}finally{button.disabled=busy||qualityBusy;}
     return;
   }
   if(pickerTarget==='gmsh-setup-path'){toast('Bản trình duyệt: hãy dán đường dẫn tuyệt đối tới gmsh.exe. Hộp chọn Windows có trong bản desktop.');return;}
   $('choose-directory').hidden=pickerTarget!=='output';const allowed=pickerTarget==='output'?bootstrap.output_roots:roots;$('roots').replaceChildren();for(const root of allowed){const choice=document.createElement('button');choice.textContent=root;choice.onclick=()=>browse(root);$('roots').append(choice);}$('picker').showModal();browse(allowed[0]);
-};
+}
+for(const button of document.querySelectorAll('[data-pick]'))button.onclick=()=>openPicker(button);
 $('close-picker').onclick=()=>$('picker').close();$('browse-go').onclick=()=>browse($('browse-path').value);$('choose-directory').onclick=()=>{$('output').value=pickerPath;invalidate();$('picker').close();};
 $('inspect-planned').onclick=()=>inspectPlanned().catch(error=>toast(error.message));$('apply-resolution').onclick=applyResolution;
 $('inspect-source').onclick=()=>inspectSource().catch(error=>toast(error.message));$('use-crs').onclick=()=>{if(source?.projected_metre){$('crs').value=source.crs;invalidate();helpers();}};
@@ -1781,7 +1808,8 @@ $('cell-find').onclick=findCell;$('cell-search').addEventListener('keydown',even
 $('zoom-in').onclick=()=>zoom(1/1.4);$('zoom-out').onclick=()=>zoom(1.4);
 for(const button of document.querySelectorAll('button[data-stage],button[data-go]'))button.onclick=()=>stage(Number(button.dataset.stage||button.dataset.go));
 for(const button of document.querySelectorAll('[data-mode]'))button.onclick=()=>{if(busy)return;$('mode').value=button.dataset.mode;invalidate();mode();};
-$('form').addEventListener('input',e=>clearSourceFieldError(e.target.id));
+function clearBoundaryInspection(){boundaryRequest++;$('boundary-info').replaceChildren();$('boundary-info').textContent='Kiểm tra lại ranh giới để cập nhật thông tin.';}
+$('form').addEventListener('input',e=>{clearSourceFieldError(e.target.id);if(['boundary-path','crs','gmsh-domain'].includes(e.target.id))clearBoundaryInspection();});
 $('source-next').onclick=async()=>{try{
   if($('mode').value==='mesh_artifact'){stage(2);return;}
   if($('gmsh-domain').value==='shapefile'){const roi=await inspectBoundary();if(!roi)return;mode();stage(2);return;}

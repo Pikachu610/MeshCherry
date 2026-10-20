@@ -526,13 +526,14 @@ class WebUITests(unittest.TestCase):
         for content in (html, script, coach):
             for contrast in ('không phải', 'chưa phải', 'không có nghĩa là'):
                 self.assertNotIn(contrast, content)
-        for label in ('Chọn GeoTIFF', 'Hai pixel nhân tạo', 'Tạo mesh bằng Gmsh'):
+        for label in ('Chọn GeoTIFF', 'Hai pixel nhân tạo', 'Tạo lưới tam giác bằng Gmsh'):
             self.assertIn(label, html)
         for unsupported in ('Kéo thả', 'khoảng 2 phút', 'Map vệ tinh', 'Phủ hoàn hảo'):
             self.assertNotIn(unsupported, html)
         for ident in ('welcome-start', 'welcome-skip', 'mode', 'raster', 'validate', 'run', 'csv', 'json', 'map'):
             self.assertEqual(html.count('id="'+ident+'"'), 1)
-        self.assertEqual(html.count('data-mode='), 3)
+        self.assertEqual(html.count('data-mode='), 0)
+        self.assertIn('<option value="gmsh_generated" selected>', html)
         self.assertIn('Nhập CRS tính toán không sửa được lỗi này', script)
         self.assertIn("if(!source.crs)throw new Error", script)
         self.assertIn('null: chưa có dữ liệu hợp lệ', script)

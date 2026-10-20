@@ -141,6 +141,61 @@ test('choosing DEM does not change ROI or advance the wizard',async()=>{
   assert.equal(t.run('currentStage'),2);assert.equal(t.get('raster').value,'a.tif');assert.equal(t.get('dem-raster').value,'elevation.asc');
 });
 
+test('mesh import after SHP opens mesh configuration without forcing Gmsh',async()=>{
+  const t=setup();t.get('gmsh-domain').value='shapefile';t.get('mode').value='gmsh_generated';
+  t.run('invalidate=()=>{};refreshRecent=async()=>{};exitTutorial=()=>{};stage=value=>{currentStage=value;};');
+  await t.run("acceptSelectedSource('mesh','existing.json')");
+  assert.equal(t.get('mode').value,'mesh_artifact');assert.equal(t.get('gmsh-domain').value,'rectangle');
+  assert.equal(t.get('boundary-info').hidden,true);assert.equal(t.get('mesh-options').hidden,false);
+  assert.equal(t.run('currentStage'),2);
+});
+
+test('SHP to rectangle hides metadata without altering restored mesh mode',()=>{
+  const t=setup();t.get('gmsh-domain').value='rectangle';t.get('mode').value='structured_grid';
+  t.run('mode()');assert.equal(t.get('boundary-info').hidden,true);
+  assert.equal(t.get('mode').value,'structured_grid');assert.equal(t.get('grid-options').hidden,false);
+});
+
+test('mesh import selection preserves accepted mesh before preflight and allows discard',async()=>{
+  const t=setup();t.get('gmsh-domain').value='shapefile';
+  t.run("meshSnapshot={jobId:'accepted123',cells:[{cell_id:'old'}]};jobId='accepted123';refreshRecent=async()=>{};exitTutorial=()=>{};stage=value=>{currentStage=value;};showRemeshDraftButton=()=>{};restoreAcceptedMeshPresentation=()=>{restored=meshSnapshot.jobId;};");
+  await t.run("acceptSelectedSource('mesh','invalid-replacement.json')");
+  assert.equal(t.run('meshSnapshot.jobId'),'accepted123');assert.equal(t.run('preserveAcceptedDuringRun'),true);
+  assert.equal(t.get('mode').value,'mesh_artifact');assert.equal(t.run('preflightId'),null);
+  t.run('discardRemeshDraft()');assert.equal(t.run('restored'),'accepted123');assert.equal(t.run('preserveAcceptedDuringRun'),false);
+});
+
+test('late SHP inspection cannot overwrite rectangle bounds or advance source Next',async()=>{
+  const t=setup();let resolve;t.context.boundaryPromise=new Promise(done=>{resolve=done;});
+  t.get('gmsh-domain').value='shapefile';t.get('boundary-path').value='dense.shp';
+  t.run("currentStage=1;api=()=>boundaryPromise;refreshRecent=async()=>{};loadInputPreview=async()=>{};");
+  const pending=t.run('inspectBoundary()');
+  t.get('gmsh-domain').value='rectangle';t.get('west').value='500';t.get('east').value='600';t.run('revision++;');
+  resolve({source_crs:'EPSG:32649',source_vertices:4,transformed_vertices:4,area_m2:100,components:1,holes:0,transform_subdivisions:1,bounds:[0,0,10,10],warnings:[]});
+  assert.equal(await pending,null);assert.equal(t.get('west').value,'500');assert.equal(t.get('east').value,'600');assert.equal(t.run('currentStage'),1);
+});
+
+test('editing SHP identity clears old validation and invalidates in-flight inspection',()=>{
+  const t=setup();t.get('boundary-info').textContent='✓ Hình học hợp lệ';
+  const start=script.indexOf('function clearBoundaryInspection()');t.run(script.slice(start,script.indexOf("$('form').addEventListener",start)));
+  t.run('boundaryRequest=4;clearBoundaryInspection()');
+  assert.equal(t.run('boundaryRequest'),5);assert.doesNotMatch(t.get('boundary-info').textContent,/Hình học hợp lệ/);
+  assert.match(t.get('boundary-info').textContent,/Kiểm tra lại/);
+});
+
+test('source Next cannot advance after domain changes during post-inspection awaits',async()=>{
+  for(const waiting of ['recent','preview']){
+    const t=setup();let release;t.context.pending=new Promise(resolve=>{release=resolve;});
+    t.get('gmsh-domain').value='shapefile';t.get('boundary-path').value='roi.shp';t.get('mode').value='gmsh_generated';
+    t.run("currentStage=1;stage=value=>{currentStage=value;};invalidate=()=>{revision++;};api=async()=>({source_crs:'EPSG:32649',source_vertices:4,transformed_vertices:4,area_m2:100,components:1,holes:0,transform_subdivisions:1,bounds:[0,0,10,10],warnings:[]});");
+    t.run(waiting==='recent'?'refreshRecent=()=>pending;loadInputPreview=async()=>{};':'refreshRecent=async()=>{};loadInputPreview=()=>pending;');
+    t.run(script.slice(script.indexOf("$('source-next').onclick="),script.indexOf('function showMeshQuality(')));
+    const next=t.get('source-next').onclick();for(let i=0;i<5;i++)await Promise.resolve();
+    t.get('gmsh-domain').value='rectangle';t.get('west').value='500';t.run('revision++;');release();await next;
+    assert.equal(t.run('currentStage'),1,waiting);assert.equal(t.get('west').value,'500',waiting);
+  }
+});
+
 test('project reopening shows saved extraction only after releasing busy guard',async()=>{
   const t=setup();
   t.context.fetch=async()=>({ok:true,json:async()=>({job_id:'project-restored123',has_attributes:true,view_settings:{result_tab:'extract',show_nodes:false,selected_cell_id:'a',view_box:'0 0 2 1'}})});
@@ -819,8 +874,8 @@ test('SHP inspection reports source/transformed counts and long-runtime notice',
   await t.run('inspectBoundary()');
   const allText=node=>[node.textContent||'',...node.children.map(allText)].join(' ');
   const text=allText(t.get('boundary-info'));
-  assert.match(text,/Số điểm biên nguồn/);assert.match(text,/Số điểm sau đổi CRS/);
-  assert.match(t.get('boundary-info').children[1].textContent,/chạy lâu/);
+  assert.match(text,/Điểm biên/);assert.match(text,/2\.206/);
+  assert.match(t.get('boundary-info').children.find(node=>node.className==='boundary-warning').textContent,/chạy lâu/);
 });
 
 test('generated mesh capacity follows bootstrap; structured retains 1000',()=>{
