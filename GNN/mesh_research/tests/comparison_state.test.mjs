@@ -64,6 +64,15 @@ function deferred() {
   return { promise, resolve };
 }
 
+test('discarding a stale comparison also clears its completion status', () => {
+  const h=comparisonHarness(async()=>({}));
+  h.elements['comparison-status'].textContent='Đã ước tính theo cấu hình cũ';
+  h.context.clearComparison();
+  assert.equal(h.elements['comparison-status'].textContent,'');
+  assert.equal(h.elements['comparison-result'].hidden,true);
+  assert.equal(h.elements['comparison-download'].hidden,true);
+});
+
 test('comparison ETA uses only current backend phase bounds and never prior task samples', () => {
   const h=comparisonHarness(async () => ({}));
   const phase='count_native_pixels';

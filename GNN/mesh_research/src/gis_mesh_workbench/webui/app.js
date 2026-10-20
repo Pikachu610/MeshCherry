@@ -1441,7 +1441,7 @@ function renderComparisonCounts(){
   const reduction=inventory?.difference?.reduction_percent;
   $('comparison-count-reduction').textContent=Number.isFinite(reduction)?`${reduction>0?'+':''}${reduction.toLocaleString('vi-VN',{maximumFractionDigits:2})}%`:'—';
 }
-function clearComparison(){comparisonReport=null;comparisonEvaluationKey='';$('comparison-result').hidden=true;$('comparison-download').hidden=true;window.ComparisonView?.clear?.($('comparison-visualization'));}
+function clearComparison(){comparisonReport=null;comparisonEvaluationKey='';$('comparison-status').textContent='';$('comparison-result').hidden=true;$('comparison-download').hidden=true;window.ComparisonView?.clear?.($('comparison-visualization'));}
 function invalidateComparisonInventory(){
   let next='';try{next=comparisonInventoryIdentity(comparisonCountConfig());}catch{}
   if(next!==comparisonCountKey){const hadInventory=Boolean(comparisonInventory);comparisonInventory=null;comparisonInventoryKey='';comparisonCountKey=next;renderComparisonCounts();if(hadInventory)$('comparison-count-status').textContent='Cấu hình đối chiếu đã đổi; hãy đếm lại để cập nhật số liệu.';}
