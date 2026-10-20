@@ -86,6 +86,45 @@ class ComparisonTests(unittest.TestCase):
         for part in ('structured', 'unstructured'):
             self.assertAlmostEqual(result[part]['valid_support_area_m2'], 3)
 
+    def test_intensive_partial_coverage_preserves_zero_support_cells(self):
+        # A tiny valid source footprint lies wholly inside the first triangle and
+        # one target square. The other accepted geometry has no raster support.
+        with rasterio.open(self.raster, 'w', driver='GTiff', width=1, height=1,
+            count=1, dtype='float64', crs=self.crs,
+            transform=Affine(.5, 0, 500001.5, 0, -.5, 1000000.5)) as dst:
+            dst.write(np.array([[17.]]), 1)
+
+        result = self.compare(cell_size_m=1)
+
+        self.assertEqual(result['structured']['node_count'], 4)
+        self.assertEqual(result['unstructured']['node_count'], 2)
+        self.assertAlmostEqual(result['common_support_area_m2'], .25)
+        self.assertAlmostEqual(result['structured']['valid_support_area_m2'], .25)
+        self.assertAlmostEqual(result['unstructured']['valid_support_area_m2'], .25)
+        self.assertEqual(result['metrics']['structured']['rmse'], 0)
+        self.assertAlmostEqual(result['metrics']['unstructured']['rmse'], 0)
+
+    def test_intensive_masked_partial_support_in_target_and_native_modes(self):
+        self.write([[10, 30], [10, 17]], [[0, 0], [0, 255]])
+        for mode in ('target_grid', 'native_raster'):
+            with self.subTest(mode=mode):
+                result = self.compare(baseline_mode=mode)
+                self.assertAlmostEqual(result['common_support_area_m2'], 1)
+                self.assertEqual(result['unstructured']['node_count'], 2)
+                self.assertAlmostEqual(result['unstructured']['valid_support_area_m2'], 1)
+                self.assertEqual(result['metrics']['unstructured']['rmse'], 0)
+                if mode == 'target_grid':
+                    self.assertEqual(result['structured']['node_count'], 4)
+                    self.assertAlmostEqual(result['structured']['valid_support_area_m2'], 1)
+                else:
+                    self.assertEqual(result['baseline']['source_pixel_count'], 4)
+                    self.assertEqual(result['baseline']['valid_source_pixel_count'], 1)
+
+    def test_intensive_native_mode_rejects_wholly_empty_common_support(self):
+        self.write([[10, 30], [10, 17]], [[0, 0], [0, 0]])
+        with self.assertRaisesRegex(ValueError, 'no finite valid common raster support'):
+            self.compare(baseline_mode='native_raster')
+
     def test_native_raster_baseline_counts_roi_pixels_and_reports_identity(self):
         self.write([[10, 30], [10, 30], [90, 90], [90, 90]])
         result = self.compare(baseline_mode='native_raster')

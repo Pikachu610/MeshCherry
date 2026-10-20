@@ -273,6 +273,11 @@ def compare_mesh(cells_path, raster_path, *, analysis_crs, cell_size_m=None,
                     raise ValueError('comparison has no finite valid common raster support')
                 for partition_states in states.values():
                     for state in partition_states:
+                        # Keep zero-support geometry in the inventory, but it
+                        # has no representative value to compare. Do not invent
+                        # a zero mean or add synthetic support to the metrics.
+                        if state['area'] <= 0:
+                            continue
                         state['mean'] = state['mean_scale'] * state['mean_normalized']
                         if not math.isfinite(state['mean']):
                             raise ValueError('comparison intensive mean exceeds finite numeric range')
