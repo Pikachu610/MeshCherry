@@ -34,7 +34,8 @@ def self_test(report, gmsh_path=None, boundary_path=None):
             conn = http.client.HTTPConnection(*server.server_address, timeout=10)
             for asset in ('/', '/coach.js', '/app.js', '/wizard.css', '/attribute_table.js',
                           '/downloads.js','/extraction_draft.js','/extraction_draft.css','/attribute_table.css','/workspace_layout.css',
-                          '/quality_panel.js','/quality_panel.css','/quality_bridge.js','/fonts/BeVietnamPro-Regular.ttf'):
+                          '/quality_panel.js','/quality_panel.css','/quality_bridge.js',
+                          '/comparison_view.js','/comparison_view.css','/fonts/SourceSans3-VF.ttf'):
                 conn.request('GET', asset, headers={'Host': server.host})
                 response = conn.getresponse()
                 body = response.read()

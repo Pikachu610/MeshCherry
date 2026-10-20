@@ -82,7 +82,8 @@
     const clearOverlayButton = btn('Bỏ tô màu, xem toàn lưới', () => selectMetric(null));
     actions.append(runButton, stopButton, clearOverlayButton); header.append(intro, actions);
     const live = make('p', 'mcp-live', 'Chọn “Chạy QA” để đánh giá lưới hiện tại.'); live.setAttribute('role', 'status'); live.setAttribute('aria-live', 'polite');
-    const form = make('form', 'mcp-config'); form.addEventListener('submit', e => { e.preventDefault(); run(); }); form.append(make('h3', '', 'Ngưỡng cảnh báo'));
+    const form = make('form', 'mcp-config'); form.addEventListener('submit', e => { e.preventDefault(); run(); });
+    const settings = make('details', 'mcp-settings'); settings.append(make('summary', '', 'Ngưỡng cảnh báo và benchmark'), form);
     const fields = [
       ['warning_min_angle_deg', 'Góc nhỏ nhất', '°', 20], ['warning_quality_q', 'Q chuẩn hóa', '', 0.2],
       ['warning_aspect_ratio', 'Tỷ số hình dạng AR', '', 10], ['relative_geometry_epsilon', 'Dung sai hình học tương đối', 'tỉ lệ', 1e-12],
@@ -105,7 +106,7 @@
     const content = make('div', 'mcp-content'), exports = make('div', 'mcp-export');
     [['JSON', 'json'], ['CSV', 'csv'], ['HTML offline', 'html']].forEach(([label, kind]) => exports.append(btn(`Xuất ${label}`, () => exportAs(kind))));
     actions.append(btn('Benchmark', runBenchmark));
-    root.append(header, live, form, tabs, content, exports); container.replaceChildren(root);
+    root.append(header, live, settings, tabs, content, exports); container.replaceChildren(root);
 
     function readConfig() {
       const config = {};
@@ -151,13 +152,13 @@
     function card(label, stat, unit, metric, prefer = 'min') {
       const node = metric ? btn('', () => selectMetric(metric), 'mcp-metric') : make('div', 'mcp-metric');
       const value = stat && isNumber(stat[prefer] ?? stat.min ?? stat.max) ? (stat[prefer] ?? stat.min ?? stat.max) : null;
-      node.append(make('span', '', label), make('strong', '', value == null ? 'N/A' : `${fmt(value)}${unit}`));
-      if (value == null) node.append(make('small', '', missingReason(state.result, metric || label, stat)));
+      if (value == null) { node.hidden = true; return node; }
+      node.append(make('span', '', label), make('strong', '', `${fmt(value)}${unit}`));
       return node;
     }
     function renderOverview() {
       const result = state.result, summary = result.summary, metrics = make('div', 'mcp-metrics');
-      metrics.append(card('Q thấp nhất', metricStats(result, 'quality_q'), '', 'quality_q'), card('Góc nhỏ nhất', metricStats(result, 'min_angle_deg'), '°', 'min_angle_deg'), card('AR lớn nhất', metricStats(result, 'aspect_ratio'), '', 'aspect_ratio'));
+      metrics.append(card('Q thấp nhất', metricStats(result, 'quality_q'), '', 'quality_q'), card('Góc nhỏ nhất', metricStats(result, 'min_angle_deg'), '°', 'min_angle_deg'), card('AR lớn nhất', metricStats(result, 'aspect_ratio'), '', 'aspect_ratio', 'max'));
       const areaUnits = result.definitions?.area_units || (result.definitions?.coordinate_units ? `${result.definitions.coordinate_units}²` : '');
       const lengthUnits = result.definitions?.coordinate_units || '';
       metrics.append(card('Diện tích nhỏ nhất', metricStats(result, 'area'), areaUnits ? ` ${areaUnits}` : '', 'area'));
@@ -176,7 +177,17 @@
       const size = box('Phù hợp kích thước', reasonText(result.size?.reason || 'Đối chiếu kích thước phần tử với trường kích thước mục tiêu.')); size.append(make('p', `mcp-status-line mcp-${text(result.size?.status).toLowerCase()}`, statusText(result.size?.status)));
       if (result.size?.definition) size.append(make('p', 'mcp-caption', `Định nghĩa: ${result.size.definition}`));
       if (isNumber(result.size?.exceed_fraction)) size.append(make('p', 'mcp-caption', `Tỷ lệ vượt dung sai: ${fmt(result.size.exceed_fraction)} tỉ lệ`));
-      Object.entries(result.size?.statistics || {}).forEach(([key, stat]) => size.append(make('p', 'mcp-caption', `${key.replaceAll('_', ' ')}: ${isNumber(stat?.median) ? fmt(stat.median) : reasonText(stat?.reason || 'Chưa được cung cấp.')} · ${fmt(stat?.valid_count)} hợp lệ · ${fmt(stat?.excluded_count)} loại trừ`)));
+      const statisticLabels = { min: 'Nhỏ nhất', p5: 'P5', median: 'Trung vị', mean: 'Trung bình', p95: 'P95', p99: 'P99', max: 'Lớn nhất' };
+      const sizeStats = result.size?.statistics || {};
+      const measured = stat => stat && typeof stat === 'object' && Object.keys(statisticLabels).some(key => isNumber(stat[key]));
+      // Integration returns one flat statistics object; allow named groups from historical reports too.
+      const groups = measured(sizeStats) ? [['Tỷ số kích thước', sizeStats]] : Object.entries(sizeStats).filter(([, stat]) => measured(stat));
+      groups.forEach(([key, stat]) => {
+        const values = Object.entries(statisticLabels).filter(([name]) => isNumber(stat[name])).map(([name, label]) => `${label}: ${fmt(stat[name])}`);
+        if (isNumber(stat.valid_count)) values.push(`${fmt(stat.valid_count)} hợp lệ`);
+        if (isNumber(stat.excluded_count) && stat.excluded_count > 0) values.push(`${fmt(stat.excluded_count)} loại trừ`);
+        size.append(make('p', 'mcp-caption', `${key === 'size_ratio' ? 'Tỷ số kích thước' : key.replaceAll('_', ' ')} · ${values.join(' · ')}`));
+      });
       const defs = box('Định nghĩa và đơn vị', 'Các chỉ số hình học được tính từ tọa độ lưới; giá trị thiếu không được thay bằng 0.'); const dl = make('dl', 'mcp-definitions');
       const definitionLabels = { area: 'Diện tích tam giác', perimeter: 'Chu vi tam giác', min_angle_deg: 'Góc nhỏ nhất', max_angle_deg: 'Góc lớn nhất', aspect_ratio: 'Tỷ số hình dạng AR', quality_q: 'Q chuẩn hóa', signed_area: 'Diện tích có dấu', relative_geometry_epsilon: 'Dung sai hình học', overlap_relative_tolerance: 'Dung sai chồng lấn', statistical_policy: 'Quy tắc thống kê', coordinate_units: 'Đơn vị tọa độ' };
       const definitionValues = { 'absolute signed triangle area; coordinate_units squared': 'Diện tích tuyệt đối của tam giác; đơn vị tọa độ bình phương.', 'sum of triangle edge lengths; coordinate_units': 'Tổng độ dài ba cạnh tam giác.', 'minimum of atan2(abs(cross), dot) vertex angles, degrees': 'Góc nhỏ nhất tại các đỉnh, tính bằng độ.', 'maximum of atan2(abs(cross), dot) vertex angles, degrees': 'Góc lớn nhất tại các đỉnh, tính bằng độ.', 'Lmax^2/(2*A) = Lmax/minimum altitude; unitless': 'Cạnh dài nhất bình phương chia hai lần diện tích; không đơn vị.', '16*A^2/((a+b+c)*a*b*c) = 2r/R; unitless, equilateral=1': 'Chỉ số không đơn vị; tam giác đều có Q = 1.', 'Q normalized, unitless': 'Chỉ số không đơn vị; tam giác đều có Q = 1.', '0.5*cross2(B-A,C-A); positive CCW, negative CW': 'Dấu cho biết hướng đỉnh ngược hay cùng chiều kim đồng hồ.', '1e-12 default; reject if |cross|/Lmax^2 <= epsilon; scale-relative, unitless': 'Mặc định 1e-12; dung sai tương đối theo tỷ lệ hình học.', '1e-10 default times smaller element area': 'Mặc định 1e-10 nhân với diện tích phần tử nhỏ hơn.', 'Only valid triangle observations enter triangle statistics; excluded_count counts invalid triangle rows.': 'Chỉ tam giác hợp lệ được đưa vào thống kê; số bị loại là số tam giác không hợp lệ.' };
@@ -195,18 +206,31 @@
         if (benchmark.memory?.limitations) summary.append(make('p', 'mcp-caption', reasonText(benchmark.memory.limitations)));
         benchmarkSummary = summary;
       }
-      content.append(overview, valid, boundary, size, perf, ...(benchmarkSummary ? [benchmarkSummary] : []), defs);
+      const definitionDetails = make('details', 'mcp-definition-details'); definitionDetails.append(make('summary', '', 'Định nghĩa và đơn vị'), defs);
+      content.append(overview, valid, boundary, size, perf, ...(benchmarkSummary ? [benchmarkSummary] : []), definitionDetails);
     }
     function renderHistograms() {
       const sectionNode = box('Phân bố chỉ số', 'Biểu đồ có tối đa 60 cột; số hợp lệ và bị loại trừ lấy trực tiếp từ QA.');
+      const unavailable = [];
       METRICS.slice(0, 5).forEach(([key, label, unit]) => {
-        const histogram = state.result.histograms?.[key], chart = make('article', 'mcp-chart');
+        const histogram = state.result.histograms?.[key];
+        if (histogram?.status !== 'AVAILABLE' || !Array.isArray(histogram.counts) || !histogram.counts.length) {
+          unavailable.push([label, missingReason(state.result, key, histogram)]); return;
+        }
+        const chart = make('article', 'mcp-chart');
         chart.append(make('h4', '', `${label}${unit ? ` (${unit})` : ''}`));
-        chart.append(make('p', 'mcp-caption', `${fmt(histogram?.valid_count)} hợp lệ · ${fmt(histogram?.excluded_count)} loại trừ · ${histogram?.binning || `${histogram?.counts?.length || 0} khoảng`}`));
-        if (histogram?.status === 'AVAILABLE' && Array.isArray(histogram.counts)) chart.append(histogramSVG(doc, histogram, `${label} histogram`));
-        else chart.append(make('p', 'mcp-empty', missingReason(state.result, key, histogram)));
+        const counts = [isNumber(histogram.valid_count) ? `${fmt(histogram.valid_count)} hợp lệ` : '', isNumber(histogram.excluded_count) && histogram.excluded_count > 0 ? `${fmt(histogram.excluded_count)} loại trừ` : '', `${histogram.counts.length} khoảng`].filter(Boolean);
+        chart.append(make('p', 'mcp-caption', counts.join(' · ')));
+        chart.append(histogramSVG(doc, histogram, `${label} histogram`));
         chart.append(btn(`Tô ${label} trên bản đồ`, () => selectMetric(key))); sectionNode.append(chart);
-      }); content.append(sectionNode);
+      });
+      if (unavailable.length) {
+        const note = make('details', 'mcp-unavailable-metrics');
+        note.append(make('summary', '', `Chưa có phân bố cho ${unavailable.map(([label]) => label).join(', ')}`));
+        for (const reason of new Set(unavailable.map(([, reason]) => reason))) note.append(make('p', 'mcp-caption', reason));
+        sectionNode.append(note);
+      }
+      content.append(sectionNode);
     }
     function rowTable(rows, columns, focus) {
       const wrap = make('div', 'mcp-table-wrap'), table = make('table'), head = make('thead'), tr = make('tr');

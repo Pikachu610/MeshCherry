@@ -123,3 +123,57 @@ test('benchmark runs only on explicit request and passes the configured repetiti
   panel.clear(); assert.match(container.children[0].text, /Chưa có kết quả QA/);
   panel.destroy();
 });
+
+test('flat size statistics render measured values once without scalar N/A rows', () => {
+  const { container } = host(); const panel = QA.mount(container, {}); const data = result();
+  data.size = { status: 'PASS', statistics: { status: 'AVAILABLE', valid_count: 3, excluded_count: 0, min: 0, p5: 0.1, median: 0.7, mean: 0.6, p95: 1.1, p99: 1.2, max: 1.3 } };
+  panel.load(data);
+  const size = container.descendants().find(n => n.tagName === 'SECTION' && n.children[0]?.text.includes('Phù hợp kích thước'));
+  assert.doesNotMatch(size.text, /N\/A|Chưa được cung cấp|status:|valid count:/);
+  assert.match(size.text, /Trung vị: 0,7/);
+  assert.match(size.text, /Nhỏ nhất: 0/);
+  assert.match(size.text, /3 hợp lệ/);
+  panel.destroy();
+});
+
+test('missing metric cards are absent and QA settings and definitions start collapsed', () => {
+  const { container } = host(); const panel = QA.mount(container, {}); panel.load(result());
+  assert.equal(container.findText('Size ratio lớn nhất'), undefined);
+  assert.doesNotMatch(container.children[0].text, /N\/A/);
+  const settings = container.descendants().find(n => n.tagName === 'DETAILS' && n.children.some(c => c.tagName === 'FORM'));
+  assert.ok(settings); assert.notEqual(settings.open, true);
+  const definitions = container.descendants().find(n => n.tagName === 'DETAILS' && n.children.some(c => c.tagName === 'SUMMARY' && c.text.includes('Định nghĩa')));
+  assert.ok(definitions); assert.notEqual(definitions.open, true);
+  panel.destroy();
+});
+
+test('all-missing size summary produces no placeholder statistic rows, keeping unavailable check visible', () => {
+  const { container } = host(); const panel = QA.mount(container, {}); const data = result();
+  data.size.statistics = { status: 'NOT_AVAILABLE', valid_count: 0, excluded_count: 3, min: null, p5: null, median: null, mean: null, p95: null, p99: null, max: null };
+  panel.load(data);
+  assert.match(container.children[0].text, /Không có trường kích thước/);
+  assert.doesNotMatch(container.children[0].text, /Chưa được cung cấp|N\/A hợp lệ|N\/A loại trừ/);
+  panel.destroy();
+});
+
+test('historical named size statistics and AR maximum keep their measured values', () => {
+  const { container } = host(); const panel = QA.mount(container, {}); const data = result();
+  data.size = { status: 'PASS', statistics: { size_ratio: { min: 0.2, median: 0.8, max: 1.1, valid_count: 3 }, absent: { min: null, median: null } } };
+  panel.load(data);
+  const ar = container.descendants().find(n => n.className === 'mcp-metric' && n.children.some(c => c.textContent === 'AR lớn nhất'));
+  assert.equal(ar.children[1].textContent, '3');
+  const size = container.descendants().find(n => n.tagName === 'SECTION' && n.children[0]?.text.includes('Phù hợp kích thước'));
+  assert.match(size.text, /Tỷ số kích thước · Nhỏ nhất: 0,2 · Trung vị: 0,8 · Lớn nhất: 1,1/);
+  assert.doesNotMatch(size.text, /absent|N\/A/);
+  panel.destroy();
+});
+
+test('unavailable histogram groups collapse into one note instead of empty charts', async () => {
+  const { container } = host(); const panel = QA.mount(container, {}); const data = result();
+  data.histograms = {};
+  panel.load(data); await container.findText('Phân bố').click();
+  assert.equal(container.descendants().filter(n => n.className === 'mcp-chart').length, 0);
+  assert.equal(container.descendants().filter(n => n.className === 'mcp-unavailable-metrics').length, 1);
+  assert.doesNotMatch(container.children[0].text, /N\/A hợp lệ|N\/A loại trừ/);
+  panel.destroy();
+});

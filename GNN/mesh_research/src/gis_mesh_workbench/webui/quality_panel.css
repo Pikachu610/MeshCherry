@@ -1,4 +1,51 @@
-.meshcherry-quality-panel{--mcp-cherry:var(--cherry,#BC2948);--mcp-ink:var(--ink,#342D31);--mcp-muted:var(--muted,#71656A);--mcp-line:var(--line,#E9E1E3);color:var(--mcp-ink);font-family:"Be Vietnam Pro","Segoe UI",sans-serif;font-size:13px;line-height:1.55;display:grid;gap:14px}
+.meshcherry-quality-panel{--mcp-cherry:var(--cherry,#BC2948);--mcp-ink:var(--ink,#342D31);--mcp-muted:var(--muted,#71656A);--mcp-line:var(--line,#E9E1E3);color:var(--mcp-ink);font-family:inherit;font-size:14px;line-height:1.55;display:grid;gap:14px}
 .meshcherry-quality-panel *{box-sizing:border-box}.mcp-top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.mcp-eyebrow{margin:0;color:var(--mcp-cherry);font-size:10px;font-weight:700;letter-spacing:.12em}.mcp-top h2{margin:2px 0;font-size:20px}.mcp-subtitle,.mcp-section-head p,.mcp-caption{color:var(--mcp-muted);margin:2px 0}.mcp-actions,.mcp-export,.mcp-tabs,.mcp-pager{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.meshcherry-quality-panel button{font:inherit;color:inherit;background:#fff;border:1px solid var(--mcp-line);border-radius:9px;padding:7px 11px;cursor:pointer}.meshcherry-quality-panel button:disabled{opacity:.55;cursor:default}.meshcherry-quality-panel .mcp-primary{background:var(--mcp-cherry);border-color:var(--mcp-cherry);color:white}.mcp-live{margin:0;min-height:22px;color:var(--mcp-muted)}.mcp-config{display:flex;flex-wrap:wrap;align-items:end;gap:8px;padding:12px;border:1px solid var(--mcp-line);border-radius:12px;background:#fff}.mcp-config h3{width:100%;margin:0 0 1px;font-size:14px}.mcp-field{display:grid;gap:3px;min-width:130px;flex:1}.mcp-field span{font-size:11px;font-weight:600}.mcp-field input,.mcp-field select{width:100%;min-width:0;border:1px solid var(--mcp-line);border-radius:8px;padding:6px 8px;background:#fff;color:inherit;font:inherit}.mcp-field small{color:var(--mcp-muted);font-size:10px}.mcp-tabs{border-bottom:1px solid var(--mcp-line)}.meshcherry-quality-panel .mcp-tab{border:0;border-radius:8px 8px 0 0;background:transparent}.meshcherry-quality-panel .mcp-tab[aria-current=page]{background:#FFF0F2;color:#8B2340;font-weight:600}.mcp-content{display:grid;gap:12px;min-width:0}.mcp-section{padding:14px;border:1px solid var(--mcp-line);border-radius:12px;background:#fff;min-width:0}.mcp-section-head h3{margin:0;font-size:15px}.mcp-section-head p{font-size:11px}.mcp-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-top:10px}.meshcherry-quality-panel .mcp-metric{display:grid;gap:3px;text-align:left;background:#fff8f9;border:1px solid #F0D6DC;border-radius:10px;padding:10px;min-width:0}.mcp-metric span{color:var(--mcp-muted);font-size:11px}.mcp-metric strong{font-size:18px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}.mcp-metric small{font-size:10px;color:var(--mcp-muted)}.mcp-status-line{margin:7px 0;padding:7px 9px;border-radius:8px;background:#F6F3F2}.mcp-pass{background:#F0F7F1}.mcp-warning{background:#FFF7E9}.mcp-fail,.mcp-error{color:#9B2440;background:#FFF0F0}.mcp-not_available,.mcp-partial{background:#F6F3F2}.mcp-definitions{display:grid;grid-template-columns:minmax(120px,.8fr) minmax(0,2fr);gap:6px 12px;margin:9px 0 0}.mcp-definitions dt{color:var(--mcp-muted)}.mcp-definitions dd{margin:0;overflow-wrap:anywhere}.mcp-chart{padding:10px 0;border-top:1px solid var(--mcp-line)}.mcp-chart h4{margin:0;font-size:13px}.mcp-chart svg{display:block;width:100%;height:auto;max-height:150px}.mcp-hist-bar{fill:#C43C5E}.mcp-hist-axis{fill:none;stroke:#A99DA1;stroke-width:1}.mcp-empty,.mcp-empty-card{padding:14px;border-radius:9px;background:#F8F5F4;color:var(--mcp-muted)}.mcp-table-wrap{max-width:100%;overflow:auto;overscroll-behavior:contain;margin-top:10px}.meshcherry-quality-panel table{width:100%;border-collapse:collapse;white-space:nowrap}.meshcherry-quality-panel th,.meshcherry-quality-panel td{padding:7px 9px;border-bottom:1px solid var(--mcp-line);text-align:left;vertical-align:top}.meshcherry-quality-panel th{position:sticky;top:0;background:#fff;font-weight:600}.meshcherry-quality-panel .mcp-sort{border:0;padding:2px;background:transparent;font-weight:600}.meshcherry-quality-panel tbody tr{cursor:pointer}.meshcherry-quality-panel tbody tr:focus{outline:2px solid var(--mcp-cherry);outline-offset:-2px}.mcp-pager{justify-content:flex-end;padding-top:9px}.mcp-export{border-top:1px solid var(--mcp-line);padding-top:10px}.mcp-export button{font-size:11px}
 @media(max-width:680px){.mcp-top{display:grid}.mcp-definitions{grid-template-columns:minmax(100px,.7fr) minmax(0,1.3fr)}.mcp-field{min-width:calc(50% - 8px)}}
-.meshcherry-quality-panel .mcp-config{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,190px),1fr));align-items:end;gap:10px}.meshcherry-quality-panel .mcp-config h3{grid-column:1/-1;width:auto}.meshcherry-quality-panel .mcp-field{min-width:0;width:100%;flex:initial;gap:4px}.meshcherry-quality-panel .mcp-field span{font-size:12px;line-height:1.35}.meshcherry-quality-panel .mcp-field input,.meshcherry-quality-panel .mcp-field select{padding:7px 9px;font:14px "Be Vietnam Pro","Segoe UI",sans-serif}.meshcherry-quality-panel .mcp-field small{font-size:11px}.meshcherry-quality-panel .mcp-primary{background:#BC2948;border-color:#BC2948;color:#fff;font-weight:700}.meshcherry-quality-panel .mcp-primary:disabled{background:#F2DFE3;border-color:#E9C8D0;color:#6D5C61}
+
+/* Make configuration discoverable without letting it dominate the report. */
+.meshcherry-quality-panel .mcp-settings > summary,
+.meshcherry-quality-panel .mcp-definition-details > summary {
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid var(--mcp-line);
+  border-radius: 9px;
+  background: #fffafb;
+  color: var(--mcp-ink);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.meshcherry-quality-panel .mcp-settings[open] > summary,
+.meshcherry-quality-panel .mcp-definition-details[open] > summary {
+  margin-bottom: 8px;
+  border-color: #e4b9c5;
+  background: #fff2f5;
+  color: #782640;
+}
+
+.meshcherry-quality-panel .mcp-definition-details > .mcp-section {
+  margin-top: 0;
+}
+
+.meshcherry-quality-panel .mcp-settings > summary:focus-visible,
+.meshcherry-quality-panel .mcp-definition-details > summary:focus-visible {
+  outline: 3px solid var(--mcp-cherry);
+  outline-offset: 2px;
+}
+
+/* Keep the QA report readable as part of the page, not a nested pane. */
+.meshcherry-quality-panel { gap: 10px; }
+.meshcherry-quality-panel .mcp-content { gap: 10px; }
+.meshcherry-quality-panel .mcp-section { padding: 12px; }
+.meshcherry-quality-panel .mcp-metrics { gap: 7px; margin-top: 8px; }
+.meshcherry-quality-panel .mcp-table-wrap {
+  overflow-x: auto;
+  overflow-y: visible;
+  overscroll-behavior: auto;
+}
+.meshcherry-quality-panel .mcp-metric strong { font-size: 16px; }
+@media (max-width: 680px) {
+  .meshcherry-quality-panel .mcp-section { padding: 10px; }
+}
+.meshcherry-quality-panel .mcp-config{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,190px),1fr));align-items:end;gap:10px}.meshcherry-quality-panel .mcp-config h3{grid-column:1/-1;width:auto}.meshcherry-quality-panel .mcp-field{min-width:0;width:100%;flex:initial;gap:4px}.meshcherry-quality-panel .mcp-field span{font-size:14px;line-height:1.35}.meshcherry-quality-panel .mcp-field input,.meshcherry-quality-panel .mcp-field select{padding:7px 9px;font-size:14px;font-family:inherit}.meshcherry-quality-panel .mcp-field small{font-size:12px}.meshcherry-quality-panel .mcp-primary{background:var(--mcp-cherry);border-color:var(--mcp-cherry);color:#fff;font-weight:700}.meshcherry-quality-panel .mcp-primary:disabled{background:#e9eef3;border-color:#cbd5df;color:#30465e}

@@ -9,6 +9,7 @@ import threading
 import tempfile
 import time
 import uuid
+from collections import OrderedDict
 from pathlib import Path
 
 from .document_api import _accepted
@@ -24,6 +25,8 @@ from .runner import write_json
 
 MAX_PAGE_SIZE = 200
 MAX_QUALITY_JOBS = 50
+MAX_QUALITY_ORDER_CACHE = 4
+MAX_QUALITY_ORDER_CACHE_ROWS = 200_000
 _CORE_KEYS = {
     "relative_geometry_epsilon", "overlap_relative_tolerance",
     "max_overlap_candidates", "max_issues", "worst_limit",
@@ -279,10 +282,17 @@ def quality_page(server, data):
             report = getattr(server, "quality_latest", {}).get(parent)
     if report is None:
         raise ValueError("No completed quality assessment is available")
-    report = _current_report(server, parent, report, cache_key=cache_key)
-    if report is None:
+    verified = _current_report(server, parent, report, cache_key=cache_key,
+                               return_identity=True)
+    if verified is None:
         raise ValueError("Saved quality assessment is stale or failed verification")
+    if isinstance(verified, tuple) and len(verified) == 2:
+        report, report_identity = verified
+    else:  # Keep simple test doubles and legacy private callers compatible.
+        report, report_identity = verified, None
     rows = report.get(section, [])
+    cache_key_parts = (cache_key, report_identity, section, sort, sort_order,
+                       issue_type if section == "issues" else None)
     if section == "elements":
         allowed_sort = {"element_id", "quality_q", "min_angle_deg", "max_angle_deg", "aspect_ratio", "area",
                         "perimeter","longest_edge","shortest_edge","target_size","size_ratio","validity_status"}
@@ -290,21 +300,63 @@ def quality_page(server, data):
             raise ValueError("Unsupported quality sort")
         key = lambda row: (str(row.get(sort, "")) if sort in {"element_id","validity_status"} else row.get(sort),
                            str(row.get("element_id", "")))
-        present = [row for row in rows if row.get(sort) is not None]
-        missing = [row for row in rows if row.get(sort) is None]
-        rows = sorted(present, key=key, reverse=sort_order == "desc") + missing
+        indices = _cached_order(server, cache_key_parts)
+        if indices is None:
+            present = [index for index, row in enumerate(rows) if row.get(sort) is not None]
+            missing = [index for index, row in enumerate(rows) if row.get(sort) is None]
+            present.sort(key=lambda index: key(rows[index]), reverse=sort_order == "desc")
+            indices = tuple(present + missing)
+            _remember_order(server, cache_key_parts, indices)
     else:
-        if issue_type and issue_type != "ALL":
-            rows = [row for row in rows if row.get("code") == issue_type or row.get("category") == issue_type]
         issue_sort={'issue_type':'category'}.get(sort,sort)
         if issue_sort not in {'code','severity','category','message','element_ids','node_ids'}:issue_sort='code'
-        rows = sorted(rows, key=lambda row: (str(row.get(issue_sort, "")),
-                                               str(row.get("severity", "")),
-                                               str(row.get("element_ids", []))), reverse=sort_order == "desc")
-    page = copy.deepcopy(rows[cursor:cursor + limit])
+        if issue_sort != sort:
+            cache_key_parts = (cache_key, report_identity, section, issue_sort, sort_order,
+                               issue_type if issue_type and issue_type != "ALL" else None)
+        indices = _cached_order(server, cache_key_parts)
+        if indices is None:
+            eligible = [index for index, row in enumerate(rows)
+                        if not issue_type or issue_type == "ALL"
+                        or row.get("code") == issue_type or row.get("category") == issue_type]
+            eligible.sort(key=lambda index: (str(rows[index].get(issue_sort, "")),
+                                              str(rows[index].get("severity", "")),
+                                              str(rows[index].get("element_ids", []))),
+                          reverse=sort_order == "desc")
+            indices = tuple(eligible)
+            _remember_order(server, cache_key_parts, indices)
+    page = copy.deepcopy([rows[index] for index in indices[cursor:cursor + limit]])
     return dict(job_id=job_id, mesh_hash=report.get("mesh_hash"), kind=section,
-        sort_by=sort, sort_order=sort_order, offset=cursor, limit=limit, total=len(rows),
-        next_offset=(cursor + len(page) if cursor + len(page) < len(rows) else None), items=page)
+        sort_by=sort, sort_order=sort_order, offset=cursor, limit=limit, total=len(indices),
+        next_offset=(cursor + len(page) if cursor + len(page) < len(indices) else None), items=page)
+
+
+def _cached_order(server, key):
+    if key[1] is None:
+        return None
+    with server.lock:
+        cache = getattr(server, "quality_order_cache", None)
+        if cache is None:
+            cache = OrderedDict()
+            server.quality_order_cache = cache
+        value = cache.get(key)
+        if value is not None:
+            cache.move_to_end(key)
+        return value
+
+
+def _remember_order(server, key, indices):
+    if key[1] is None:
+        return
+    with server.lock:
+        cache = getattr(server, "quality_order_cache", None)
+        if cache is None:
+            cache = OrderedDict()
+            server.quality_order_cache = cache
+        cache[key] = indices
+        cache.move_to_end(key)
+        while (len(cache) > MAX_QUALITY_ORDER_CACHE
+               or sum(len(value) for value in cache.values()) > MAX_QUALITY_ORDER_CACHE_ROWS):
+            cache.popitem(last=False)
 
 
 def quality_export(server, data):
@@ -365,7 +417,7 @@ def cached_quality_for_mesh(server, parent):
     return _current_report(server, parent, report)
 
 
-def _current_report(server, parent, report, *, cache_key=None):
+def _current_report(server, parent, report, *, cache_key=None, return_identity=False):
     if not isinstance(report, dict) or not isinstance(parent, str) or not parent:
         return None
     with server.lock:
@@ -406,7 +458,9 @@ def _current_report(server, parent, report, *, cache_key=None):
         if isinstance(provenance, dict) and provenance.get("mesh_job_id") == parent:
             if provenance.get("mesh_manifest_sha256") != current_manifest_hash:
                 return None
-        _json_bytes(report)  # strict finite JSON and the 64 MiB report bound
+        if metadata is None:
+            report_hash = hashlib.sha256(_json_bytes(report)).hexdigest()
     except (ValueError, TypeError, OSError, KeyError, AttributeError):
         return None
-    return state["assessment"]
+    assessment = state["assessment"]
+    return (assessment, report_hash) if return_identity else assessment

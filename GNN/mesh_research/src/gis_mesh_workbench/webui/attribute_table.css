@@ -12,7 +12,7 @@
 .mc-attribute-table__status { min-height: 1.4em; }
 .mc-attribute-table__loading { display: block; height: 0.5rem; margin-block: 0.35rem; width: min(100%, 36rem); }
 .mc-attribute-table__error { color: #9c1c26; }
-.mc-attribute-table__scroll { max-height: min(55vh, 34rem); overflow: auto; overscroll-behavior: contain; border: 1px solid #f1d5dd; }
+.mc-attribute-table__scroll { overflow-x: auto; overflow-y: visible; overscroll-behavior: auto; border: 1px solid #f1d5dd; }
 .mc-attribute-table__grid { border-collapse: separate; border-spacing: 0; min-width: 100%; white-space: nowrap; }
 .mc-attribute-table__grid th,
 .mc-attribute-table__grid td { background: #fff; border-bottom: 1px solid #f1d5dd; border-right: 1px solid #f5e5e9; padding: 0.4rem 0.65rem; text-align: left; }
@@ -25,10 +25,10 @@
 .mc-download p { margin: 0; }
 .mc-download__progress { min-height: 0.65rem; width: min(100%, 36rem); }
 .mc-download__actions { display: flex; gap: 0.5rem; }
-#batch-queue { display: grid; gap: 0.5rem; max-height: 24rem; overflow: auto; overscroll-behavior: contain; padding: 0.25rem 0.5rem 0.25rem 1.5rem; }
+#batch-queue { display: grid; gap: 0.5rem; padding: 0.25rem 0.5rem 0.25rem 1.5rem; }
 #batch-queue > li { align-items: center; display: grid; gap: 0.5rem; grid-template-columns: minmax(10rem, 2fr) minmax(8rem, 1fr) 5rem minmax(8rem, 1fr) minmax(10rem, 1fr) auto; }
 #batch-queue > li > small { overflow-wrap: anywhere; }
-#batch-feature-list { max-height: 24rem; overflow: auto; overscroll-behavior: contain; padding-inline-start: 1.5rem; }
+#batch-feature-list { padding-inline-start: 1.5rem; }
 #batch-feature-list > li { align-items: baseline; display: grid; gap: 0.5rem; grid-template-columns: minmax(10rem, 1fr) auto minmax(12rem, 2fr); }
 #batch-feature-list small { overflow-wrap: anywhere; }
 @media (max-width: 800px) {

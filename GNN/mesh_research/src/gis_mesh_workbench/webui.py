@@ -281,6 +281,7 @@ class WorkbenchServer(ThreadingHTTPServer):
         with self.lock:
             if self.picker_active: raise ValueError('Hãy đóng hộp chọn tệp trước khi kiểm tra')
             if self._active_job_locked(): raise ValueError('Hãy chờ tác vụ hiện tại hoàn tất trước khi kiểm tra')
+            if self.preflight_inflight: raise ValueError('Hãy chờ kiểm tra dữ liệu hiện tại hoàn tất')
             self.preflight_generation+=1
             generation=self.preflight_generation
             self.current_preflight=None; self.validated.clear()
@@ -460,6 +461,27 @@ class WorkbenchServer(ThreadingHTTPServer):
                                 value_units=config['value_units'],edge_subdivisions=8)
                             if baseline_mode=='native_raster':options['baseline_mode']=baseline_mode
                             report=compare_mesh(cells,raster,**options)
+                            visualization=report.get('visualization')
+                            if isinstance(visualization,dict):
+                                checkpoint()
+                                from .input_preview import raster_preview
+                                try:
+                                    thumbnail=raster_preview(raster,band=config['band'])
+                                except (ValueError,OSError) as preview_error:
+                                    visualization.setdefault('source',{})['reason']='Không tạo được ảnh nguồn: '+str(preview_error)
+                                else:
+                                    visualization.setdefault('source',{}).update({key:thumbnail[key] for key in
+                                        ('image','crs','bounds','sampled','display_shape','source_shape')})
+                                    visualization['source'].update(available=True,shared_zoom=False,
+                                        frame='native source CRS and full-source extent')
+                                    visualization['source'].pop('reason',None)
+                                    visualization['shared_zoom_layers']=['structured','unstructured','overlay']
+                                checkpoint()
+                                # The optional display read cannot weaken the measured raster identity.
+                                source_identity=report.get('provenance',{}).get('source_files_sha256')
+                                if source_identity:
+                                    from .raster_source import assert_unchanged
+                                    assert_unchanged(raster,source_identity)
                         from shapely.geometry import Polygon
                         from .comparison_allocation import allocation_summary
                         areas=[]
@@ -603,15 +625,14 @@ class Handler(BaseHTTPRequestHandler):
         try:
             parsed=urlsplit(self.path); path=parsed.path
             self.guard(api=path.startswith('/api/'))
-            fonts = {f'/fonts/BeVietnamPro-{weight}.ttf': f'BeVietnamPro-{weight}.ttf'
-                     for weight in ('Regular', 'Medium', 'SemiBold', 'Bold')}
+            fonts = {'/fonts/SourceSans3-VF.ttf': 'SourceSans3-VF.ttf'}
             if path in fonts:
                 return self.respond((ASSETS/'fonts'/fonts[path]).read_bytes(), content_type='font/ttf')
-            if path in {'/','/app.js','/coach.js','/attribute_table.js','/downloads.js','/extraction_draft.js','/extraction_draft.css','/attribute_table.css','/workspace_layout.css','/style.css','/wizard.css','/icon.png','/favicon.ico','/quality_panel.js','/quality_panel.css','/quality_bridge.js'}:
+            if path in {'/','/app.js','/coach.js','/attribute_table.js','/downloads.js','/extraction_draft.js','/extraction_draft.css','/attribute_table.css','/workspace_layout.css','/style.css','/wizard.css','/icon.png','/favicon.ico','/quality_panel.js','/quality_panel.css','/quality_bridge.js','/comparison_view.js','/comparison_view.css'}:
                 name={'/':'index.html','/icon.png':'meshcherry-icon-v1.png',
                       '/favicon.ico':'meshcherry-icon-v1.ico'}.get(path,path[1:])
                 mime={'index.html':'text/html','app.js':'text/javascript','coach.js':'text/javascript','attribute_table.js':'text/javascript','downloads.js':'text/javascript','extraction_draft.js':'text/javascript','extraction_draft.css':'text/css','attribute_table.css':'text/css','workspace_layout.css':'text/css','style.css':'text/css','wizard.css':'text/css',
-                      'quality_panel.js':'text/javascript','quality_bridge.js':'text/javascript','quality_panel.css':'text/css',
+                      'quality_panel.js':'text/javascript','quality_bridge.js':'text/javascript','quality_panel.css':'text/css','comparison_view.js':'text/javascript','comparison_view.css':'text/css',
                       'meshcherry-icon-v1.png':'image/png','meshcherry-icon-v1.ico':'image/vnd.microsoft.icon'}[name]
                 body=(ASSETS/name).read_bytes()
                 if name=='index.html':body=body.replace(b'{{APP_VERSION}}',__version__.encode('ascii'))

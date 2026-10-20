@@ -54,8 +54,8 @@ test('empty ROI with a selected relief DEM returns a field-specific error before
   t.run("currentStage=3;checkParameterFields=()=>true;stage=value=>{currentStage=value;};");
   await t.run('validate()');
   assert.equal(t.run('currentStage'),1);assert.equal(t.get('raster').focused,true);
-  assert.match(t.get('source-info').textContent,/Chọn GeoTIFF.*ranh giới ROI/);
-  assert.doesNotMatch(t.get('source-info').textContent,/cell_source|schemas|elevation.tif/);
+  assert.match(t.get('source-warning').textContent,/Chọn GeoTIFF.*ranh giới ROI/);
+  assert.doesNotMatch(t.get('source-warning').textContent,/cell_source|schemas|elevation.tif/);
   assert.equal(t.run('preflightId'),null);
 });
 
@@ -519,10 +519,10 @@ test('out-of-range extract band has a readable Vietnamese message',()=>{
   const t=setup();assert.match(t.run("readableExtractError('Resolution reference band out of range')"),/Band đã chọn không có/);
 });
 
-test('result log and extract tabs remain read-only navigable while a job is busy',()=>{
+test('log and extract result panes remain read-only navigable while a job is busy',()=>{
   const t=setup();t.run("busy=true;jobId='extract-owned';meshSnapshot={digest:'unchanged'};savedMap=null;showResultTab('log');");
   assert.equal(t.run('resultTab'),'log');assert.equal(t.run('jobId'),'extract-owned');
-  assert.equal(t.get('result-log-tab').getAttribute('aria-selected'),'true');
+  assert.equal(t.context.document.body.dataset.result,'log');
   assert.equal(t.get('result-log-panel').hidden,false);assert.equal(t.get('mesh-result-panel').hidden,true);assert.equal(t.get('extract-result-panel').hidden,true);
   t.run("showResultTab('extract');");assert.equal(t.run('resultTab'),'extract');
   assert.equal(t.get('extract-result-panel').hidden,false);assert.equal(t.get('result-log-panel').hidden,true);assert.equal(t.get('mesh-result-panel').hidden,true);
@@ -629,13 +629,13 @@ test('reset removes old run/export/CRS/map identity',()=>{
   assert.equal(t.run('jobId'),null);assert.equal(t.run('resultPath'),'');assert.equal(t.run('fitBox'),null);
   assert.equal(t.get('exports').hidden,true);assert.equal(t.get('map').getAttribute('viewBox'),null);
   assert.equal(t.run('jobHeadline.textContent'),'Chưa có lượt chạy.');
-  assert.equal(t.get('button[data-stage="4"]').disabled,true);
+  assert.equal(t.run('displayCellCount()'),0);
 });
-test('result tabs retain full extraction data and geometry without remeshing',()=>{
+test('result workspaces retain full extraction data and geometry without remeshing',()=>{
   const t=setup();t.run("draw([{cell_id:'a',kind:'triangle',xy:[[0,0],[1,0],[0,1]]}],[{cell_id:'a',value:10,footprint_coverage:1,valid_coverage:1}],{crs:'EPSG:32649',units:'m'});showResultTab('mesh')");
   assert.equal(t.run('attrs.size'),0);assert.equal(t.run('savedMap.records[0].value'),10);
   t.run("showResultTab('extract')");assert.equal(t.run('attrs.get(\"a\").value'),10);
-  assert.equal(t.run('geometry[0].cell_id'),'a');assert.equal(t.get('result-extract-tab').getAttribute('aria-selected'),'true');
+  assert.equal(t.run('geometry[0].cell_id'),'a');assert.equal(t.context.document.body.dataset.result,'extract');
 });
 test('stale preview response cannot replace a different source',async()=>{
   const t=setup();t.get('gmsh-domain').value='raster';let resolve;

@@ -1,5 +1,45 @@
 # Mesh research pipeline
 
+## 3.2 RC5 compact, readable workspaces
+
+This UI pass follows an independently reviewed design: essential source controls
+and pixel resolution precede optional history/diagnostics; mesh controls and DEM
+preview use independent columns. Source Sans3 is bundled offline with its OFL
+license and shared readable typography. The File menu owns project commands and
+the single workspace navigation follows ROI, mesh, comparison, extraction, logs.
+Numerical methods, source identity checks and accepted mesh geometry are unchanged.
+Implementation, browser and final source-review evidence are recorded separately;
+an approved design is not native-window or LTS certification.
+
+## 3.2 RC3 workspace and visual comparison
+
+One workspace strip opens ROI, mesh, extraction, logs and comparison. Mesh
+results expose an edit/remesh action that retains the accepted mesh until a
+replacement succeeds. Compact application menus, collapsed run configuration
+and QA settings, and page-level scrolling replace duplicated result tabs and
+nested report scroll panels.
+
+Measured structured/unstructured comparisons display full element counts,
+signed changes, percentage changes and separate geometric-vertex counts.
+Bounded display-only geometry previews show both partitions and their shared
+alignment; sampling/simplification never supplies numerical totals. The optional
+real raster thumbnail explicitly uses its own source CRS and full-source extent.
+Area-only estimates are labeled and do not invent raster or grid geometries.
+Missing QA metric rows are hidden while unavailable scientific checks retain
+their concise explanation. Earlier RC2 integrity and recovery fixes remain.
+
+## 3.2 RC2 audit repairs
+
+The current candidate binds extraction table responses and exports to the same
+job/mesh/view, rejects concurrent preflight checks before changing validation
+generation, and prevents desktop close during document work or preflight.
+Quality pagination reuses bounded verified sort indices and eliminates duplicate
+report serialization. It still checks current artifact content hashes on every
+read; pagination is not claimed to be independent of total report size.
+These repairs do not change mesh generation, geometry acceptance, remapping
+semantics or source rasters. Native Windows visual acceptance and large-field
+performance remain separate gates; an RC is not long-term release certification.
+
 ## MeshCherry quality assessment (3.2 candidate)
 
 Accepted meshes can be evaluated on demand without remeshing. The quality

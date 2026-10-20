@@ -41,7 +41,7 @@ class IntegrationRegressionTests(unittest.TestCase):
         self.assertTrue(result[0]['superseded'])
         self.assertIsNone(self.server.current_preflight)
 
-    def test_latest_concurrent_preflight_wins_over_late_older_result(self):
+    def test_rejected_concurrent_preflight_does_not_supersede_current_result(self):
         older_entered=threading.Event();release_older=threading.Event();results={}
         def ordered_preflight(config):
             if config['run_name']=='older':
@@ -51,15 +51,20 @@ class IntegrationRegressionTests(unittest.TestCase):
             older=dict(self.config,run_name='older');newer=dict(self.config,run_name='newer')
             first=threading.Thread(target=lambda:results.setdefault('older',self.server.validate_form(older)))
             first.start();self.assertTrue(older_entered.wait(2))
-            results['newer']=self.server.validate_form(newer)
-            release_older.set();first.join(5)
+            try:
+                generation=self.server.preflight_generation
+                with self.assertRaisesRegex(ValueError,'chờ'):
+                    self.server.validate_form(newer)
+                self.assertEqual(self.server.preflight_generation,generation)
+            finally:
+                release_older.set();first.join(5)
         self.assertFalse(first.is_alive())
-        self.assertIsNone(results['older']['preflight_id'])
-        self.assertTrue(results['older']['superseded'])
-        self.assertEqual(self.server.current_preflight,results['newer']['preflight_id'])
-        self.assertIn(results['newer']['preflight_id'],self.server.validated)
+        self.assertIsNotNone(results['older']['preflight_id'])
+        self.assertFalse(results['older']['superseded'])
+        self.assertEqual(self.server.current_preflight,results['older']['preflight_id'])
+        self.assertIn(results['older']['preflight_id'],self.server.validated)
 
-    def test_latest_validated_preflight_can_start_while_superseded_preflight_finishes(self):
+    def test_preflight_retry_can_start_after_current_preflight_finishes(self):
         older_entered=threading.Event();release_older=threading.Event();results={}
         def ordered_preflight(config):
             if config['run_name']=='older':
@@ -70,14 +75,20 @@ class IntegrationRegressionTests(unittest.TestCase):
             older=dict(self.config,run_name='older');newer=dict(self.config,run_name='newer')
             first=threading.Thread(target=lambda:results.setdefault('older',self.server.validate_form(older)))
             first.start();self.assertTrue(older_entered.wait(2))
-            results['newer']=self.server.validate_form(newer)
-            started=self.server.start_job(results['newer']['preflight_id'],'latest-request-0001')
             try:
-                self.assertEqual(started['status'],'running')
+                with self.assertRaisesRegex(ValueError,'chờ'):
+                    self.server.validate_form(newer)
             finally:
                 release_older.set();first.join(5)
+            self.assertFalse(first.is_alive())
+            results['newer']=self.server.validate_form(newer)
+            self.assertNotEqual(results['older']['preflight_id'],results['newer']['preflight_id'])
+            with self.assertRaisesRegex(ValueError,'preflight|kiểm tra'):
+                self.server.start_job(results['older']['preflight_id'])
+            started=self.server.start_job(results['newer']['preflight_id'],'latest-request-0001')
+            self.assertEqual(started['status'],'running')
         self.assertFalse(first.is_alive())
-        self.assertTrue(results['older']['superseded'])
+        self.assertFalse(results['newer']['superseded'])
         self.assertEqual(self.server.jobs[started['job_id']]['request_id'],'latest-request-0001')
 
     def test_run_request_id_recovers_same_terminal_job_and_rejects_rebinding(self):

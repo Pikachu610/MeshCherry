@@ -1,12 +1,15 @@
 # MeshCherry — Windows desktop
 
-## Development snapshot: 3.2.0rc1
+## Development snapshot: 3.2.0rc5
 
 The current source includes the on-demand mesh quality explorer, QA reports,
 hash-bound `.mcy` quality caches and explicit geometry-only benchmarks.
 This is a development checkpoint ahead of the long-term performance,
 architecture and UI audit; it is not a new stable binary release.
-See [snapshot scope and evidence](RELEASE_V3.2.0-RC1.md).
+The latest checkpoint adds compact ROI/DEM workspaces, offline Source Sans 3,
+direct File-menu project commands, measured structured/unstructured comparison
+previews and safer task navigation. Stable downloads below remain unchanged.
+See [current scope and evidence](RELEASE_V3.2.0-RC5.md).
 
 ## MeshCherry 3.0.0 — bản phát hành chính thức
 

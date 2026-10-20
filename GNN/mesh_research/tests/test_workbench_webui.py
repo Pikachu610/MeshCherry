@@ -163,8 +163,11 @@ class WebUITests(unittest.TestCase):
         status,report,_=self.request('/api/input-preview',dict(path=str(self.raster),kind='raster',band=2))
         self.assertNotEqual(status,200)
         html=self.request('/')[1].decode('utf-8')
-        for name in ('input-preview-image','result-mesh-tab','result-extract-tab','result-view'):
+        for name in ('input-preview-image','mesh-result-panel','extract-result-panel','result-view','comparison-workspace-content'):
             self.assertIn('id="'+name+'"',html)
+        self.assertNotIn('id="result-mesh-tab"',html)
+        self.assertNotIn('id="result-extract-tab"',html)
+        self.assertIn('src="/comparison_view.js"',html)
         style=self.request('/wizard.css')[1].decode('utf-8')
         self.assertIn('body[data-stage="2"] .viewer,body[data-stage="3"] .viewer{display:none}',style)
 
@@ -316,8 +319,7 @@ class WebUITests(unittest.TestCase):
 
     def test_local_font_routes_are_allowlisted(self):
         from gis_mesh_workbench.webui import ASSETS
-        for weight in ('Regular', 'Medium', 'SemiBold', 'Bold'):
-            name = f'BeVietnamPro-{weight}.ttf'
+        for name in ('SourceSans3-VF.ttf',):
             status, body, headers = self.request('/fonts/'+name)
             self.assertEqual(status, 200)
             self.assertEqual(headers['Content-Type'], 'font/ttf')
@@ -325,7 +327,8 @@ class WebUITests(unittest.TestCase):
             self.assertEqual(body[:4], b'\x00\x01\x00\x00')
         self.assertEqual(self.request('/fonts/unknown.ttf')[0], 404)
         self.assertEqual(self.request('/fonts/../app.js')[0], 404)
-        self.assertIn('SIL OPEN FONT LICENSE', (ASSETS/'fonts'/'OFL.txt').read_text())
+        self.assertEqual(self.request('/fonts/BeVietnamPro-Regular.ttf')[0], 404)
+        self.assertIn('SIL OPEN FONT LICENSE', (ASSETS/'fonts'/'SourceSans3-OFL.txt').read_text())
 
     def test_coach_asset_and_focus_contract(self):
         from gis_mesh_workbench.webui import ASSETS

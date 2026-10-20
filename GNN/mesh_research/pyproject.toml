@@ -35,5 +35,5 @@ version = {attr = "gis_mesh_workbench._version.__version__"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-gis_mesh_workbench = ["*.json", "webui/*.html", "webui/*.js", "webui/*.css", "webui/*.png", "webui/*.ico", "webui/fonts/*.ttf", "webui/fonts/OFL.txt", "sample_data/*.tif", "sample_data/*.json"]
+gis_mesh_workbench = ["*.json", "webui/*.html", "webui/*.js", "webui/*.css", "webui/*.png", "webui/*.ico", "webui/fonts/*.ttf", "webui/fonts/OFL.txt", "webui/fonts/SourceSans3-OFL.txt", "sample_data/*.tif", "sample_data/*.json"]
 

@@ -63,6 +63,7 @@ def launch(workspace=WORKSPACE, webview_module=None, preferences=None, startup_p
         def closing():
             with server.lock:
                 if (server.picker_active or server.downloads.active or
+                        server.document_active or server.preflight_inflight or
                         any(job['status'] in {'running','stopping'} for job in server.jobs.values())):
                     return False
         window.events.closing += closing

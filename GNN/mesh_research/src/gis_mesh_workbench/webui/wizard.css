@@ -20,12 +20,8 @@ input[aria-invalid="true"]{border-color:#BC2948;background:#FFF3F4}
 #fixed-parameters .detail-rows{grid-template-columns:minmax(100px,.8fr) minmax(0,1fr)}
 #mesh-quality h3{margin:8px 0;font-size:17px}#mesh-quality h4{font-size:14px;margin:18px 0 6px}
 body[data-stage="4"] .wizard-panel:has(#mesh-quality){display:block;padding:16px;border:1px solid var(--line);background:#fff}
-@font-face{font-family:"Be Vietnam Pro";src:url("/fonts/BeVietnamPro-Regular.ttf") format("truetype");font-weight:400;font-display:swap}
-@font-face{font-family:"Be Vietnam Pro";src:url("/fonts/BeVietnamPro-Medium.ttf") format("truetype");font-weight:500;font-display:swap}
-@font-face{font-family:"Be Vietnam Pro";src:url("/fonts/BeVietnamPro-SemiBold.ttf") format("truetype");font-weight:600;font-display:swap}
-@font-face{font-family:"Be Vietnam Pro";src:url("/fonts/BeVietnamPro-Bold.ttf") format("truetype");font-weight:700 900;font-display:swap}
 :root{--cherry:#BC2948;--pink:#FFF0F2;--ink:#342D31;--muted:#71656A;--line:#E9E1E3;--paper:#FAF8F6;--r-control:10px;--r-panel:18px;--r-dialog:24px}
-body{font-family:"Be Vietnam Pro","Segoe UI",sans-serif;font-size:14px;line-height:1.65;background:var(--paper);font-synthesis:none}
+body{font-size:15px;line-height:1.55;background:var(--paper);font-synthesis:none}
 button,input,select{font-family:inherit;font-size:14px;line-height:1.5}
 button{border-radius:var(--r-control);padding:10px 15px;transition:background .15s,border-color .15s}
 button.primary{background:var(--cherry);box-shadow:none}

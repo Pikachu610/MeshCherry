@@ -5,6 +5,7 @@ pieces of a clipped square become separate connected control volumes. This
 module never edits accepted geometry or rasters.
 """
 import math
+import random
 from pathlib import Path
 
 import numpy as np
@@ -249,6 +250,10 @@ def compare_mesh(cells_path, raster_path, *, analysis_crs, cell_size_m=None,
     errors = {name: dict(scale=0., squared=0., absolute=0., bias=0., area=0.) for name in parts}
     native_counts = dict(source_pixel_count=0, valid_source_pixel_count=0,
                          clipped_component_count=0)
+    # The geometric native-pixel sample is display-only and strictly bounded.
+    native_preview_polygons = []
+    native_preview_seen = 0
+    native_preview_rng = random.Random(0)
 
     # One shared source traversal per pass guarantees identical masks and band.
     with open_raster(raster_path) as src:
@@ -308,6 +313,13 @@ def compare_mesh(cells_path, raster_path, *, analysis_crs, cell_size_m=None,
                             if component_count:
                                 native_counts['source_pixel_count'] += 1
                                 native_counts['clipped_component_count'] += component_count
+                                native_preview_seen += 1
+                                if len(native_preview_polygons) < 1200:
+                                    native_preview_polygons.append(clipped)
+                                else:
+                                    replacement = native_preview_rng.randrange(native_preview_seen)
+                                    if replacement < 1200:
+                                        native_preview_polygons[replacement] = clipped
                                 zone_counts['structured'][_zone_index(
                                     zones, clipped.representative_point())] += 1
                                 if valid[row, col]:
@@ -505,4 +517,23 @@ def compare_mesh(cells_path, raster_path, *, analysis_crs, cell_size_m=None,
     report['spatial_zones'] = dict(rows=zone_rows,
         allocation_rule='each accepted triangle or target cell is assigned once by its representative point; each native source pixel with positive-area ROI intersection is assigned once by the representative point of that clipped pixel geometry; row 0 is south and column 0 is west',
         relief_alignment='not_assessed')
+    # Keep geometric mesh vertices visibly distinct from cell-centred graph
+    # nodes. This is a structural count, not another graph-node count.
+    unique_vertices = set()
+    for cell_index, cell in enumerate(frozen.cells):
+        if cell_index % 128 == 0:
+            checkpoint()
+        unique_vertices.update(cell.xy)
+    report['geometry_counts'] = dict(
+        unstructured_unique_vertex_count=len(unique_vertices),
+        unstructured_vertex_definition='unique accepted mesh coordinate pairs; graph nodes remain one per triangle cell')
+    from .comparison_visualization import comparison_visualization
+    report['visualization'] = comparison_visualization(
+        domain=domain,
+        structured=squares if baseline_mode == 'target_grid' else native_preview_polygons,
+        structured_total_count=(len(squares) if baseline_mode == 'target_grid'
+                                else native_counts['source_pixel_count']),
+        unstructured=triangles,
+        source_reason='Source raster values were measured, but no spatial thumbnail is included in this report.',
+    )
     return report
