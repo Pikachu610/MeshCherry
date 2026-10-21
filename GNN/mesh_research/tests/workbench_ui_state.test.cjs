@@ -427,7 +427,7 @@ test('resolution estimate renders estimated counts and never renders data error 
 });
 
 test('monitor uses actual phase percentage and scoped ETA only',()=>{
-  const t=setup();t.run("jobId='a';busy=true;renderMonitor({status:'running',stage:'meshing',monitor:{phase:'gmsh_2d',phase_percent:40,elapsed_seconds:12,eta:null}})");
+  const t=setup();t.run("jobId='a';mainActiveJobId='a';busy=true;renderMonitor({status:'running',stage:'meshing',monitor:{phase:'gmsh_2d',phase_percent:40,elapsed_seconds:12,eta:null}})");
   assert.equal(t.get('job-monitor').hidden,false);assert.match(t.get('monitor-percent').textContent,/40%.*trong log Gmsh/);
   assert.match(t.get('monitor-eta').textContent,/Chưa đủ dữ liệu/);assert.equal(t.get('cancel-run').disabled,false);
   t.run("renderMonitor({status:'running',stage:'meshing',monitor:{phase:'gmsh_2d',phase_percent:40,eta:{scope:'gmsh_2d',low_seconds:1,high_seconds:5}}})");
@@ -526,7 +526,7 @@ test('stale log response cannot populate another run',async()=>{
   assert.equal(t.get('job-log').textContent,'');assert.equal(t.run('jobLogCursor'),0);
 });
 test('lost stop acknowledgement does not unlock inputs or claim stopped',async()=>{
-  const t=setup();t.run("jobId='a';busy=true;api=async()=>{throw Error('offline')}");await t.run('requestStop()');
+  const t=setup();t.run("jobId='a';mainActiveJobId='a';busy=true;api=async()=>{throw Error('offline')}");await t.run('requestStop()');
   assert.equal(t.run('busy'),true);assert.match(t.run('jobHeadline.textContent'),/Chưa xác nhận/);assert.equal(t.run('cancelPending'),false);
 });
 

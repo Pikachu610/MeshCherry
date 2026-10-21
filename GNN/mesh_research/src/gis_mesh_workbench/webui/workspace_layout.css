@@ -473,10 +473,9 @@ body[data-workspace="extract"] #batch-queue {
   max-height: min(48vh, 520px);
   margin: 12px 0;
   padding: 2px;
-  overflow: auto;
+  overflow-y: auto;
   list-style: none;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
+  overscroll-behavior-y: auto;
 }
 
 body[data-workspace="extract"] #batch-queue > li {
