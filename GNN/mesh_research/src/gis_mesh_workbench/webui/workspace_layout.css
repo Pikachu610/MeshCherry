@@ -411,6 +411,20 @@ body[data-workspace="mesh"] #gmsh-options > #dem-preview {
   min-width: 0;
 }
 
+/* Uniform Gmsh has no DEM controls or preview, so pair its setup with sizing. */
+body[data-workspace="mesh"] #gmsh-options > .configuration-group {
+  grid-column: 1 / -1;
+}
+
+body[data-workspace="mesh"] #gmsh-options:has(#gmsh-sizing option[value="uniform"]:checked) > .configuration-group,
+body[data-workspace="mesh"] #gmsh-options:has(#gmsh-sizing option[value="uniform"]:checked) > .dem-workbench-columns {
+  grid-column: span 6;
+}
+
+body[data-workspace="mesh"] #gmsh-options:has(#gmsh-sizing option[value="uniform"]:checked) #parameter-preview {
+  display: none;
+}
+
 body[data-workspace="mesh"] #gmsh-options .configuration-group,
 body[data-workspace="mesh"] #gmsh-options details,
 body[data-workspace="mesh"] #resolution-options,
@@ -863,6 +877,10 @@ body[data-workspace="mesh"] .dem-workbench-columns {
   min-width: 0;
 }
 
+body[data-workspace="mesh"] .dem-workbench-columns:has(> #dem-preview[hidden]) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 body[data-workspace="mesh"] .dem-controls-column,
 body[data-workspace="mesh"] .dem-preview-column {
   min-width: 0;
@@ -925,6 +943,11 @@ body[data-workspace="extract"] #batch-queue {
   body[data-workspace="roi"] .workspace { grid-template-columns: minmax(0, 1fr); }
   body[data-workspace="mesh"] .dem-workbench-columns {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  body[data-workspace="mesh"] #gmsh-options:has(#gmsh-sizing option[value="uniform"]:checked) > .configuration-group,
+  body[data-workspace="mesh"] #gmsh-options:has(#gmsh-sizing option[value="uniform"]:checked) > .dem-workbench-columns {
+    grid-column: 1 / -1;
   }
 
   body[data-workspace="mesh"] .dem-workbench-columns > .dem-controls-column,
