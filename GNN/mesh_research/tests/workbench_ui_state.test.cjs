@@ -18,6 +18,7 @@ function setup(){
   }
   const get=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
   get('crs').value='EPSG:32649';get('band').value='1';get('dem-band').value='1';get('gmsh-sizing').value='uniform';get('raster').value='a.tif';get('mode').value='structured_grid';
+  get('boundary-preparation-enabled').checked=false;
   const timers=[];
   const urls={created:[],revoked:[],createObjectURL(blob){this.created.push(blob);return 'blob:preview-'+this.created.length;},revokeObjectURL(url){this.revoked.push(url);}};
   const context=vm.createContext({document:{getElementById:get,createElement:()=>new Element(),createElementNS:()=>new Element(),querySelector:selector=>get(selector),querySelectorAll:()=>[],body:{dataset:{}}},window:{matchMedia:()=>({matches:false})},location:{hash:'',pathname:'/',reload(){this.reloads=(this.reloads||0)+1;}},sessionStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,String(value)),removeItem:key=>storage.delete(key)},URL:urls,Blob,atob,Uint8Array,URLSearchParams,history:{},coach:{update(){}},setTimeout:callback=>{timers.push(callback);return timers.length;},clearTimeout(){},console,fetch(){throw Error('mock API not configured');}});
@@ -271,7 +272,7 @@ test('count-only request publishes geometric inventory independently and never s
   assert.equal(t.get('comparison-baseline-count').textContent,'12.345');
   assert.equal(t.get('comparison-count-delta').textContent,'+1.170');
   assert.match(t.get('comparison-baseline-label').textContent,/Pixel hình học/);
-  assert.match(t.get('comparison-count-status').textContent,/Pixel có dữ liệu hợp lệ theo mask\/NoData: chưa tính/);
+  assert.match(t.get('comparison-count-status').textContent,/tính cả pixel NoData.*so sánh số phần tử hình học/);
 });
 
 test('cancelled raster evaluation retains the prior report and count inventory',async()=>{
@@ -341,6 +342,28 @@ test('legacy relief result keeps its original single-window thresholds',()=>{
   const text=node=>[node.textContent||'',...node.children.map(text)].join(' ');const rendered=text(t.get('mesh-quality'));
   assert.match(rendered,/P25 \/ P95 relief · ngưỡng từ DEM.*2 \/ 20/);assert.match(rendered,/Nửa cửa sổ relief thực.*200 × 300 m/);
 });
+
+test('run overview loads the accepted mesh, never the later extraction job',async()=>{
+  const t=setup();t.context.calls=[];
+  t.run("meshSnapshot={jobId:'mesh-accepted',qa:{run_overview:{status:'pass'}}};jobId='extract-new';fetch=async url=>{calls.push(url);return {ok:true,blob:async()=>new Blob(['png'],{type:'image/png'})};}");
+  t.run("showResultTab('log')");for(let step=0;step<5;step++)await Promise.resolve();t.run('overviewImage.onload()');
+  assert.match(t.context.calls[0],/id=mesh-accepted&name=overview/);assert.equal(t.run('overviewImage.hidden'),false);
+  t.run('clearRunOverview()');assert.equal(t.run('overviewPanel.hidden'),true);assert.equal(t.urls.revoked.length,1);
+});
+
+test('late overview response cannot replace a different accepted mesh',async()=>{
+  const t=setup();t.run("meshSnapshot={jobId:'mesh-A',qa:{run_overview:{status:'pass'}}};fetch=()=>new Promise(resolve=>{resolveOverview=resolve;});overviewPending=loadRunOverview();meshSnapshot={jobId:'mesh-B',qa:{}};clearRunOverview();resolveOverview({ok:true,blob:async()=>new Blob(['png'],{type:'image/png'})});");
+  await t.run('overviewPending');assert.equal(t.urls.created.length,0);assert.equal(t.run('overviewPanel.hidden'),true);
+});
+
+test('coverage QA labels distinguish canonical ROI from derived meshing domain',()=>{
+  for(const derived of [false,true]){
+    const t=setup();t.context.qa={cell_count:1,vertex_count:3,area_min_m2:1,area_max_m2:1,edge_min_m:1,edge_max_m:2,overlap_area_m2:0,triangle_min_angle_deg:30,triangle_max_aspect:2,domain_symmetric_difference_m2:0,domain_area_m2:1,domain_coverage:'pass',component_count:1,hole_count:0,sizing_summary:{mode:'uniform'}};
+    if(derived)t.context.qa.sizing_summary.derived_boundary={source:{segment_count:20},derived:{segment_count:4},symmetric_difference_fraction:.001,boundary_distance:{upper_bound_m:5}};
+    t.run('showMeshQuality(qa)');const text=node=>[node.textContent||'',...node.children.map(text)].join(' '),rendered=text(t.get('mesh-quality'));
+    assert.match(rendered,derived?/Phủ miền dẫn xuất/:/Phủ ROI/);if(derived)assert.doesNotMatch(rendered,/Phủ ROI/);
+  }
+});
 test('comparison raster picker preserves mesh and result authority',()=>{
   const t=setup();t.run("meshSnapshot={jobId:'mesh',digest:'immutable'};jobId='extract';comparisonReport={old:true};acceptPickerPath('comparison-raster','new.asc')");
   assert.equal(t.run('meshSnapshot.digest'),'immutable');assert.equal(t.run('jobId'),'extract');assert.equal(t.get('comparison-raster').value,'new.asc');assert.equal(t.run('comparisonReport'),null);
@@ -352,7 +375,7 @@ test('comparison poll keeps main job identity and handles cancellation without l
 test('comparison report renders signed node reduction and quantity-specific explanation',()=>{
   const t=setup();t.run("renderComparison({semantics:'categorical',structured:{cell_count:10,node_count:10},unstructured:{cell_count:12,node_count:12},node_reduction_percent:-20,common_support_area_m2:100})");
   const panel=t.get('comparison-result');assert.equal(panel.hidden,false);assert.equal(t.get('comparison-download').hidden,false);
-  const values=panel.children[1].children.map(box=>box.children[0].textContent);assert.deepEqual(values,['10','12','-20%']);
+  const values=panel.children[1].children.map(box=>box.children[0].textContent);assert.deepEqual(values,['10','12','Tăng 20%']);
   const explanation=panel.children.find(c=>c.textContent?.startsWith('Tỷ lệ diện tích'));assert.match(explanation.textContent,/Tỷ lệ diện tích từng lớp/);assert.doesNotMatch(explanation.textContent,/RMSE/);
 });
 test('25000-category report bounds DOM rows while JSON download retains every class',async()=>{
@@ -369,8 +392,8 @@ test('categorical comparison separates spatial modal agreement from conservation
   const t=setup();t.run("renderComparison({semantics:'categorical',graph_node_delta:-25,square_grid:{cell_size_m:50},metrics:{structured:{area_weighted_modal_agreement:.5,area_weighted_modal_disagreement:.5,max_fraction_error:0},unstructured:{area_weighted_modal_agreement:.875,area_weighted_modal_disagreement:.125,max_fraction_error:0}}})");
   const panel=t.get('comparison-result'),table=panel.children.find(c=>c.className==='comparison-table'),rows=table.children[1].children.map(row=>row.children.map(cell=>cell.textContent));
   assert.deepEqual(rows.slice(0,3),[['Khớp lớp phổ biến · trọng số diện tích','50%','87,5%'],['Sai khác lớp phổ biến · trọng số diện tích','50%','12,5%'],['Phần dư bảo toàn tỷ lệ lớp · lớn nhất','0','0']]);
-  const text=node=>[node.textContent||'',...node.children.map(text)].join(' ');assert.match(text(panel),/Chênh lệch node · hiện tại − lưới mục tiêu -25/);assert.match(text(panel),/Ô mới tăng số node tính toán/);
-  t.run("renderComparison({graph_node_delta:12345})");assert.match(text(panel),/Chênh lệch node · hiện tại − lưới mục tiêu \+12\.345/);
+  const text=node=>[node.textContent||'',...node.children.map(text)].join(' ');assert.match(text(panel),/Chênh lệch phần tử · tam giác − lưới mục tiêu -25/);assert.match(text(panel),/Ô mới tăng số phần tử tính toán/);
+  t.run("renderComparison({graph_node_delta:12345})");assert.match(text(panel),/Chênh lệch phần tử · tam giác − lưới mục tiêu \+12\.345/);
 });
 test('comparison acknowledgement recovery adopts only comparison operation',async()=>{
   const t=setup();t.run("comparisonRequest=2;busy=true;api=async()=>({job_id:'comp',operation:'comparison'});pollComparison=async()=>{};jobId='main'");await t.run('recoverComparison(2)');assert.equal(t.run('comparisonJobId'),'comp');assert.equal(t.run('jobId'),'main');assert.equal(t.run('busy'),true);
@@ -407,7 +430,7 @@ test('intensive comparison presents RMSE while extensive presents conservation s
 test('native raster report separates source pixels, valid pixels, and clipped control-volume pieces',()=>{
   const t=setup();t.run("renderComparison({baseline:{mode:'native_raster',source_pixel_count:8,valid_source_pixel_count:6,clipped_component_count:11,source_resolution:{x:60,y:60,units:'m',crs:'EPSG:32649'},identity_reference:true},structured:{cell_count:8,node_count:8},unstructured:{cell_count:10,node_count:10},node_reduction_percent:-25,graph_node_delta:2,common_support_area_m2:100,semantics:'intensive',metrics:{structured:{rmse:0,mae:0,bias:0,units:'m'},unstructured:{rmse:1,mae:.5,bias:0,units:'m'}}})");
   const text=node=>[node.textContent||'',...node.children.map(text)].join(' '),rendered=text(t.get('comparison-result'));
-  assert.match(rendered,/Pixel raster nguồn · giao ROI/);assert.match(rendered,/Pixel nguồn hợp lệ trong hỗ trợ/);assert.match(rendered,/Mảnh control volume sau khi cắt/);
+  assert.match(rendered,/Pixel giao miền lưới · đếm hình học/);assert.match(rendered,/Pixel nguồn hợp lệ trong hỗ trợ/);assert.match(rendered,/Mảnh control volume sau khi cắt/);
   assert.match(rendered,/60 × 60 m · EPSG:32649/);assert.match(rendered,/Độ chính xác GNN cần đánh giá riêng/);
   const table=t.get('comparison-result').children.find(c=>c.className==='comparison-table');
   assert.equal(table.children[0].children[0].children[1].textContent,'Pixel raster gốc');
@@ -416,7 +439,7 @@ test('target comparison exposes source60 and requested30 plus bounded zone count
   const t=setup();t.run("renderComparison({baseline:{mode:'target_grid',source_resolution:{x:60,y:60,units:'m',crs:'EPSG:32649'}},square_grid:{cell_size_m:30},spatial_zones:{rows:[{row:0,column:0,roi_area_m2:3600,structured_node_count:4,mesh_node_count:2,mesh_nodes_per_km2:555.555,structured_nodes_per_km2:1111.111}]},semantics:'intensive'})");
   const text=node=>[node.textContent||'',...node.children.map(text)].join(' '),rendered=text(t.get('comparison-result'));
   assert.match(rendered,/60 × 60 m · EPSG:32649/);assert.match(rendered,/Cạnh ô mục tiêu \(m\) 30/);
-  assert.match(rendered,/Mật độ node theo vùng/);assert.match(rendered,/Lưới vuông mục tiêu/);
+  assert.match(rendered,/Mật độ phần tử theo vùng/);assert.match(rendered,/Lưới vuông mục tiêu/);
   assert.match(rendered,/số phép đo của raster nguồn được giữ nguyên/);
 });
 test('resolution estimate renders estimated counts and never renders data error metrics',()=>{
@@ -866,6 +889,23 @@ test('uniform hides relief fields and emits no stale DEM/radius/minimum',()=>{
   assert.equal(t.run('cfg.cell_source.h_min_m'),250);assert.equal(t.run('cfg.cell_source.h_max_m'),250);
   assert.equal(t.run("'relief_radius_m' in cfg.cell_source"),false);assert.equal(t.run("'extent' in cfg.cell_source"),false);
   assert.equal(t.get('subdivisions').hidden,true);assert.match(t.get('subdivisions-help').textContent,/cố định 8/);
+});
+
+test('derived boundary is explicit SHP opt-in and validates its three limits',()=>{
+  const t=setup();for(const [id,v] of Object.entries({mode:'gmsh_generated','gmsh-domain':'shapefile','gmsh-sizing':'uniform','boundary-path':'roi.shp','gmsh-exe':'gmsh.exe','max-cells':'1000','h-max':'250',subdivisions:'8'}))t.get(id).value=v;
+  t.run('mode();cfg=config()');assert.equal(t.run("'boundary_preparation' in cfg.cell_source"),false);
+  t.get('boundary-preparation-enabled').checked=true;
+  t.get('boundary-tolerance').value='100';t.get('boundary-distance').value='150';t.get('boundary-area-percent').value='1';
+  t.run('mode();cfg=config()');assert.equal(t.run('cfg.cell_source.boundary_preparation.tolerance_m'),100);assert.equal(t.run('cfg.cell_source.boundary_preparation.max_area_change_fraction'),.01);
+  assert.equal(t.get('boundary-tolerance').disabled,false);
+  t.get('boundary-area-percent').value='6';assert.throws(()=>t.run('config()'),/Biên dẫn xuất/);
+  t.get('gmsh-domain').value='rectangle';for(const [id,value] of Object.entries({west:0,south:0,east:100,north:100}))t.get(id).value=String(value);t.run('mode();cfg=config()');assert.equal(t.get('boundary-preparation-options').hidden,true);assert.equal(t.run("'boundary_preparation' in cfg.cell_source"),false);
+});
+
+test('starting another run clears derived boundary opt-in and limits',()=>{
+  const t=setup();t.get('boundary-preparation-enabled').checked=true;t.get('boundary-tolerance').value='100';t.get('boundary-distance').value='150';t.get('boundary-area-percent').value='.5';
+  t.run('resetBatchResultsForMesh=()=>{};clearInputPreview=()=>{};exitTutorial=()=>{};clearAcceptedMesh=()=>{};invalidate=()=>{};resetResult=()=>{};mode=()=>{};helpers=()=>{};stage=()=>{};startAnother()');
+  assert.equal(t.get('boundary-preparation-enabled').checked,false);assert.equal(t.get('boundary-tolerance').value,'');assert.equal(t.get('boundary-distance').value,'');assert.equal(t.get('boundary-area-percent').value,'1');
 });
 
 test('SHP inspection reports source/transformed counts and long-runtime notice',async()=>{

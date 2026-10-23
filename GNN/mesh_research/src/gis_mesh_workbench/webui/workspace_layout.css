@@ -94,7 +94,7 @@ body[data-workspace] .workflow {
   box-shadow: 0 12px 30px #43232b24;
 }
 
-.app-menubar details:nth-last-child(-n + 2) > [role="group"] {
+.app-menubar details:nth-of-type(n + 4) > [role="group"] {
   right: 0;
   left: auto;
 }
@@ -168,6 +168,230 @@ body[data-workspace] .workflow {
   background: transparent;
   white-space: nowrap;
   font-size: 13px;
+}
+
+/* Native desktop chrome is present only when the authenticated server has a
+   native window-control callback. The browser keeps its ordinary page header. */
+.window-chrome__icon,
+.window-chrome__drag-region,
+.window-chrome__controls,
+.window-chrome__resize-handle {
+  display: none;
+}
+
+body[data-desktop-chrome="true"] {
+  padding-top: 48px;
+}
+
+body[data-desktop-chrome="true"] > header {
+  display: none;
+}
+
+body[data-desktop-chrome="true"] .app-menubar {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 1000;
+  height: 48px;
+  min-height: 48px;
+  gap: 2px;
+  padding: 0 8px;
+  border-bottom-color: #d8e0e8;
+  background: #fffdfd;
+  user-select: none;
+}
+
+body[data-desktop-chrome="true"] .window-chrome__icon {
+  display: block;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  margin: 0 5px 0 2px;
+  object-fit: contain;
+}
+
+body[data-desktop-chrome="true"] .window-chrome__drag-region {
+  display: block;
+  flex: 1 1 32px;
+  min-width: 18px;
+  height: 100%;
+  cursor: default;
+}
+
+body[data-desktop-chrome="true"] .app-menubar details {
+  flex: 0 0 auto;
+}
+
+body[data-desktop-chrome="true"] .app-menubar summary {
+  min-height: 36px;
+  padding: 5px 9px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+body[data-desktop-chrome="true"] .app-menubar summary::after {
+  display: none;
+}
+
+body[data-desktop-chrome="true"] .app-menubar details > [role="group"] {
+  top: calc(100% + 2px);
+}
+
+body[data-desktop-chrome="true"] .window-chrome__controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  align-self: stretch;
+  gap: 2px;
+  margin-left: auto;
+}
+
+body[data-desktop-chrome="true"] .window-chrome__button {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  min-width: 42px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #263647;
+  transition: background-color .12s ease;
+}
+
+body[data-desktop-chrome="true"] .window-chrome__button:hover:not(:disabled) {
+  border-color: transparent;
+  background: #edf1f5;
+  color: #17283c;
+}
+
+body[data-desktop-chrome="true"] .window-chrome__button:active:not(:disabled) {
+  transform: none;
+}
+
+body[data-desktop-chrome="true"] .window-chrome__button:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid #b51f4b;
+  outline-offset: -3px;
+}
+
+body[data-desktop-chrome="true"] .window-chrome__button--close:hover:not(:disabled) {
+  background: #c42f43;
+  color: #fff;
+}
+
+.window-chrome__glyph {
+  position: relative;
+  display: block;
+  width: 12px;
+  height: 12px;
+}
+
+.window-chrome__glyph--minimize::before {
+  position: absolute;
+  right: 1px;
+  bottom: 2px;
+  left: 1px;
+  height: 1px;
+  background: currentColor;
+  content: "";
+}
+
+.window-chrome__glyph--maximize {
+  border: 1px solid currentColor;
+  border-top-width: 2px;
+}
+
+.window-chrome__button[aria-pressed="true"] .window-chrome__glyph--maximize {
+  width: 11px;
+  height: 10px;
+  margin-top: 2px;
+  border-top-width: 1px;
+}
+
+.window-chrome__button[aria-pressed="true"] .window-chrome__glyph--maximize::before {
+  position: absolute;
+  top: -4px;
+  right: -3px;
+  width: 9px;
+  height: 7px;
+  border: 1px solid currentColor;
+  border-bottom: 0;
+  content: "";
+}
+
+.window-chrome__glyph--close::before,
+.window-chrome__glyph--close::after {
+  position: absolute;
+  top: 5px;
+  left: 0;
+  width: 13px;
+  height: 1px;
+  background: currentColor;
+  content: "";
+}
+
+.window-chrome__glyph--close::before { transform: rotate(45deg); }
+.window-chrome__glyph--close::after { transform: rotate(-45deg); }
+
+body[data-desktop-chrome="true"] .workspace-nav {
+  top: 48px;
+}
+
+body[data-desktop-chrome="true"] .window-chrome__resize-handle {
+  position: fixed;
+  z-index: 1001;
+  display: block;
+  touch-action: none;
+}
+
+.window-chrome__resize-handle--n,
+.window-chrome__resize-handle--s {
+  right: 10px;
+  left: 10px;
+  height: 5px;
+  cursor: ns-resize;
+}
+
+.window-chrome__resize-handle--n { top: 0; }
+.window-chrome__resize-handle--s { bottom: 0; }
+
+.window-chrome__resize-handle--e,
+.window-chrome__resize-handle--w {
+  top: 10px;
+  bottom: 10px;
+  width: 5px;
+  cursor: ew-resize;
+}
+
+.window-chrome__resize-handle--e { right: 0; }
+.window-chrome__resize-handle--w { left: 0; }
+
+.window-chrome__resize-handle--ne,
+.window-chrome__resize-handle--se,
+.window-chrome__resize-handle--sw,
+.window-chrome__resize-handle--nw {
+  width: 12px;
+  height: 12px;
+}
+
+.window-chrome__resize-handle--ne { top: 0; right: 0; cursor: nesw-resize; }
+.window-chrome__resize-handle--se { right: 0; bottom: 0; cursor: nwse-resize; }
+.window-chrome__resize-handle--sw { bottom: 0; left: 0; cursor: nesw-resize; }
+.window-chrome__resize-handle--nw { top: 0; left: 0; cursor: nwse-resize; }
+
+@media (max-width: 640px) {
+  body[data-desktop-chrome="true"] .app-menubar {
+    flex-wrap: nowrap;
+    gap: 2px;
+    padding-inline: 8px;
+  }
+
+  body[data-desktop-chrome="true"] .app-menubar summary {
+    min-height: 36px;
+    padding-inline: 9px;
+  }
 }
 
 /* Shared visual system for the complete workbench. */
@@ -405,20 +629,48 @@ body[data-workspace="mesh"] #gmsh-options > #relief-controls {
   grid-column: 1 / -1;
 }
 
+.run-overview { width:100%; min-width:0; margin:0 0 16px; }
+.run-overview img { display:block; width:100%; height:auto; background:white; border:1px solid #edcfda; border-radius:10px; }
+.run-overview img[hidden] { display:none; }
+
+body[data-workspace="mesh"] #gmsh-options > #boundary-preparation-options {
+  grid-column: 1 / -1;
+  min-width: 0;
+  width: 100%;
+  border: 1px solid #e8c0cc;
+  border-radius: 12px;
+  background: #fff7f9;
+  padding: 14px;
+}
+
+.boundary-preparation-panel h4 { margin: 0 0 10px; font-size: 14px; }
+.boundary-preparation-panel > label { display: block; margin: 8px 0 12px; }
+.boundary-preparation-panel .boundary-method-callout {
+  border-left: 4px solid #bd2346;
+  background: #fff;
+  padding: 9px 12px;
+  margin-top: 12px;
+  line-height: 1.6;
+}
+.boundary-preparation-panel .boundary-method-callout p { margin: 4px 0 9px; }
+.boundary-preparation-panel .boundary-method-callout button { margin-top: 4px; }
+
 body[data-workspace="mesh"] #gmsh-options > .configuration-group,
 body[data-workspace="mesh"] #gmsh-options > #dem-preview {
   grid-column: span 6;
   min-width: 0;
 }
 
-/* Uniform Gmsh has no DEM controls or preview, so pair its setup with sizing. */
+/* Uniform sizing also supports an optional reference DEM for the overview. */
 body[data-workspace="mesh"] #gmsh-options > .configuration-group {
   grid-column: 1 / -1;
 }
 
-body[data-workspace="mesh"] #gmsh-options:has(#gmsh-sizing option[value="uniform"]:checked) > .configuration-group,
-body[data-workspace="mesh"] #gmsh-options:has(#gmsh-sizing option[value="uniform"]:checked) > .dem-workbench-columns {
+body[data-workspace="mesh"] #gmsh-options:has(#gmsh-sizing option[value="uniform"]:checked) > .configuration-group {
   grid-column: span 6;
+}
+body[data-workspace="mesh"] #gmsh-options:has(#gmsh-sizing option[value="uniform"]:checked) > .dem-workbench-columns {
+  grid-column: 1 / -1;
 }
 
 body[data-workspace="mesh"] #gmsh-options:has(#gmsh-sizing option[value="uniform"]:checked) #parameter-preview {

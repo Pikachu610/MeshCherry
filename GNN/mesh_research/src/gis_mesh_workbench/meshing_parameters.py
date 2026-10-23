@@ -69,7 +69,10 @@ def request_summary(config, domain_evidence=None):
         summary['roi_subdivisions']=8 if roi_type=='shapefile' else config.get('edge_subdivisions',8) if roi_type in {'geotiff','ascii_grid'} else None
         if roi_type=='shapefile':
             summary['boundary_vertices']=dict(source=evidence.get('source_vertices'),
-                transformed=evidence.get('transformed_vertices'),simplification_applied=False)
+                transformed=evidence.get('transformed_vertices'),simplification_applied=evidence.get('simplification_applied',False))
+            if evidence.get('derived_boundary'):
+                summary['derived_boundary']=evidence['derived_boundary']
+                summary['boundary_preparation']=source.get('boundary_preparation')
             summary['boundary_warnings']=evidence.get('warnings',[])
         if source['sizing']=='uniform':summary['requested_target_size_m']=source['h_max_m']
         elif source['sizing']=='sf1_relief':

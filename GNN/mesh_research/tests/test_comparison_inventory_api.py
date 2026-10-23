@@ -126,6 +126,35 @@ class ComparisonInventoryAPITests(unittest.TestCase):
         self.assertEqual(inventory['provenance']['valid_data_count']['status'],'not_computed')
         self.assertIsNone(inventory['provenance']['valid_data_count']['value'])
 
+    def test_native_element_count_does_not_depend_on_raster_values_or_mask(self):
+        import numpy as np
+        import rasterio
+        self.seed()
+        for index, (values, mask) in enumerate((
+            ([[10., 30.]], [[255, 255]]),
+            ([[-9999., -9999.]], [[255, 255]]),
+            ([[float('nan'), float('nan')]], [[255, 255]]),
+            ([[10., 30.]], [[0, 0]]),
+            ([[float('nan'), float('inf')]], [[0, 0]]),
+        )):
+            with self.subTest(index=index):
+                with rasterio.open(self.raster, 'r+') as dst:
+                    dst.nodata = -9999
+                    dst.write(np.array(values, dtype='float64'), 1)
+                    dst.write_mask(np.array(mask, dtype='uint8'))
+                status, started, _ = self.request('/api/comparison/count', dict(
+                    mesh_job_id='accepted-inventory', baseline_mode='native_raster',
+                    raster_path=str(self.raster), request_id=f'geometry-values-{index:04}'))
+                self.assertEqual(status, 202, started)
+                self.assertEqual(self.wait_job(started['job_id'])['status'], 'pass')
+                status, inventory, _ = self.request('/api/artifact?id=' + started['job_id'] +
+                    '&name=comparison_counts')
+                self.assertEqual(status, 200, inventory)
+                self.assertEqual(inventory['mesh_count']['count'], 2)
+                self.assertEqual(inventory['baseline']['count'], 2)
+                self.assertEqual(inventory['difference'], dict(
+                    signed_mesh_minus_baseline=0, reduction_percent=0.0))
+
     def test_tampered_mesh_is_rejected_before_immediate_full_count(self):
         cells=self.seed();cells.write_bytes(cells.read_bytes()+b' ')
         status,_,_=self.request('/api/comparison/count',self.target_payload('inventory-test-0003'))

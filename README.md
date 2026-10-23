@@ -1,15 +1,16 @@
 # MeshCherry — Windows desktop
 
-## Development snapshot: 3.2.0rc5
+## Bản tải thử mới: 3.2.0 RC13
 
-The current source includes the on-demand mesh quality explorer, QA reports,
-hash-bound `.mcy` quality caches and explicit geometry-only benchmarks.
-This is a development checkpoint ahead of the long-term performance,
-architecture and UI audit; it is not a new stable binary release.
-The latest checkpoint adds compact ROI/DEM workspaces, offline Source Sans 3,
-direct File-menu project commands, measured structured/unstructured comparison
-previews and safer task navigation. Stable downloads below remain unchanged.
-See [current scope and evidence](RELEASE_V3.2.0-RC5.md).
+[Tải RC13 Windows x64](https://github.com/Pikachu610/MeshCherry/releases/tag/v3.2.0-rc13)
+· [Tính năng, sửa lỗi và giới hạn kiểm chứng](RELEASE_V3.2.0-RC13.md).
+
+RC13 sửa DEM tham chiếu khi chia đều và căn bốn khung hình tổng kết;
+giữ riêng so sánh số phần tử hình học với đánh giá sai số raster.
+Đếm ô đối chứng đã có lượt RC13 hoàn thành. Đánh giá sai số raster lớn vẫn có thể
+bị chặn do hạn mức tổng khối lượng đọc; đây là tác vụ riêng với đếm số phần tử.
+Không chạy lại bộ kiểm thử chức năng cho RC13 theo yêu cầu người dùng;
+đây chưa phải bản ổn định dài hạn. Bản ổn định bên dưới được giữ nguyên.
 
 ## MeshCherry 3.0.0 — bản phát hành chính thức
 

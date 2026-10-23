@@ -27,9 +27,19 @@ from .meshing_parameters import (CONTROL_SHAPE, PERCENTILE_POSITIONS, RELIEF_GAM
 from .workload_limits import MAX_MESH_BYTES, MAX_MESH_NODES, MAX_MSH_ELEMENTS, GMSH_TIMEOUT_SECONDS
 
 
-def mesh_domain(config):
+def mesh_domain(config, *, prepared=True):
     source=config['cell_source']; target=metric_crs(config['analysis_crs'])
-    if source.get('boundary_path'): return read_boundary(source['boundary_path'],target)
+    if source.get('boundary_path'):
+        domain,evidence=read_boundary(source['boundary_path'],target)
+        if prepared and 'boundary_preparation' in source:
+            from .derived_boundary import prepare_boundary
+            derived=prepare_boundary(domain,**source['boundary_preparation'])
+            domain=derived.geometry
+            evidence=dict(evidence,derived_boundary=derived.metadata,
+                simplification_applied=True,area_m2=domain.area,bounds=list(domain.bounds),
+                boundary_policy='opt-in validated derived meshing boundary; canonical SHP unchanged',
+                warnings=['Đang dùng biên dẫn xuất đã kiểm định; SHP gốc và vùng chuẩn hóa relief được giữ nguyên.'])
+        return domain,evidence
     if source.get('roi_raster_path'):
         from .indexed_extraction import footprint
         with open_raster(source['roi_raster_path']) as src:
@@ -75,13 +85,13 @@ def inspect_executable(path):
     return dict(executable=str(executable),version=version,executable_sha256=before)
 
 
-def inspect_domain(config):
+def inspect_domain(config, *, domain_info=None):
     source=config['cell_source']; target=metric_crs(config['analysis_crs'])
     if not source.get('boundary_path') and not source.get('roi_raster_path'):
         w,s,e,n=source['extent']
         if not all(math.isfinite(v) for v in (w,s,e,n)) or e<=w or n<=s:
             raise ValueError('Miền tăng dần và hữu hạn là bắt buộc')
-    domain,boundary=mesh_domain(config)
+    domain,boundary=mesh_domain(config) if domain_info is None else domain_info
     w,s,e,n=domain.bounds; lo,hi=source['h_min_m'],source['h_max_m']
     if not all(math.isfinite(v) for v in (w,s,e,n,lo,hi)) or e<=w or n<=s or not 0<lo<=hi:
         raise ValueError('Miền tăng dần và 0 < h_min ≤ h_max (m) là bắt buộc')
@@ -141,7 +151,7 @@ def size_field(config, directory):
     observe('size_field')
     dem_path,dem_band=dem_source(config);before=_digest(Path(dem_path))
     raster_before=snapshot(dem_path)
-    source=config['cell_source']; domain,_=mesh_domain(config); w,s,e,n=map(float,domain.bounds)
+    source=config['cell_source']; domain,_=mesh_domain(config,prepared=False); w,s,e,n=map(float,domain.bounds)
     lo,hi=source['h_min_m'],source['h_max_m']; shape=CONTROL_SHAPE
     transform=from_bounds(w,s,e,n,*shape[::-1]); data=np.full(shape,np.nan)
     with open_raster(dem_path) as src:
@@ -154,7 +164,7 @@ def size_field(config, directory):
     valid=np.isfinite(data)
     support=np.ones(shape,dtype=bool)
     if source.get('boundary_path') or source.get('roi_raster_path'):
-        domain,_=mesh_domain(config)
+        domain,_=mesh_domain(config,prepared=False)
         support=geometry_mask([mapping(domain)],out_shape=shape,transform=transform,invert=True)
         valid &= support
     if not valid.any(): raise ValueError('Miền chia không có cao độ DEM hợp lệ')
@@ -245,15 +255,18 @@ def generate(config, output):
     from .runner import write_json
     observe('domain')
     raster_inputs=raster_snapshots(config)
-    source=config['cell_source']; evidence=inspect_domain(config); target=metric_crs(config['analysis_crs'])
-    directory=output/'meshing'; directory.mkdir()
+    source=config['cell_source']; target=metric_crs(config['analysis_crs'])
     domain,boundary=mesh_domain(config)
+    evidence=inspect_domain(config,domain_info=(domain,boundary))
+    directory=output/'meshing'; directory.mkdir()
     w,s,e,n=domain.bounds; hi=source['h_max_m']; lo=source['h_min_m']
     if boundary!=evidence.get('boundary'): raise ValueError('Bộ SHP thay đổi trước khi tạo miền')
     config=dict(config,cell_source=dict(source,extent=[w,s,e,n]))
     if source['sizing']=='sf1_relief':
         from .sf1_sizing import write_field
-        field=write_field(config,directory,domain)
+        canonical_domain,_=mesh_domain(config,prepared=False)
+        field=write_field(config,directory,canonical_domain)
+        field['normalization_geometry']='canonical ROI; unchanged by optional meshing boundary preparation'
     else:
         field=size_field(config,directory) if source['sizing']=='relief' else dict(method='uniform',requested_target_size_m=hi)
     lines=['Mesh.MshFileVersion=2.2;','Mesh.Binary=0;','Mesh.ElementOrder=1;',f'Mesh.Algorithm={GMSH_ALGORITHM};',
@@ -297,6 +310,7 @@ def generate(config, output):
         requested_meshing_controls=source.get('advanced'),cell_count=len(cells),domain_coverage='pass',
         component_count=len(components),hole_count=sum(len(p.interiors) for p in components),
         domain_area_m2=domain.area,mesh_union_area_m2=union.area,symmetric_difference_area_m2=union.symmetric_difference(domain).area,
+        coverage_reference='validated derived meshing domain' if source.get('boundary_preparation') else 'canonical selected ROI',
         boundary_status='UNVERIFIED',graph_kind='cell centres; no routing',mesh_sha256=_digest(directory/'mesh.msh'))
     assert_rasters_unchanged(raster_inputs)
     evidence['raster_inputs']=raster_inputs

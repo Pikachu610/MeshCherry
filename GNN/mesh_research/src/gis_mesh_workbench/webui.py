@@ -31,6 +31,7 @@ from .presentation import INTERACTIVE_CELL_LIMIT, display_policy, artifact_view
 from ._version import __version__
 from .build_info import identity
 from .failure_details import describe_failure
+from .comparison_failures import describe_comparison_failure
 from .raster_source import RASTER_SUFFIXES, bundle_paths as raster_bundle_paths, open_raster, check_driver, authorized_reads
 
 ASSETS=Path(__file__).with_name('webui')
@@ -38,6 +39,7 @@ WORKSPACE=(Path(sys.executable).resolve().parent/'workspace'
            if getattr(sys, 'frozen', False) else Path(__file__).resolve().parents[4])
 ARTIFACTS={'manifest':'manifest.json','qa':'qa.json','cells':'cells.json',
            'attributes':'attributes.json','csv':'attributes.csv','preview':'preview.png',
+           'overview':'run-overview.png',
            'msh':'meshing/mesh.msh','mesh':'meshing/mesh.json','gmsh_log':'meshing/gmsh.log',
            'comparison':'comparison.json','comparison_counts':'comparison-counts.json',
            'quality':'quality.json'}
@@ -59,6 +61,7 @@ class WorkbenchServer(ThreadingHTTPServer):
         self.gmsh_preferences=Path(gmsh_preferences) if gmsh_preferences is not None else self.workspace/'.scratch/gis-mesh-workbench/gmsh.json'
         self.native_picker=None
         self.native_save=None
+        self.native_window_control=None
         self.document_active=False
         self.picker_active=False
         self.selected_files=set()
@@ -188,6 +191,7 @@ class WorkbenchServer(ThreadingHTTPServer):
         """Record known sources for overwrite protection without granting access."""
         source=config.get('cell_source') or {}
         references=[config.get('raster_path'),(config.get('resolution_reference') or {}).get('path')]
+        references.append((config.get('overview_dem') or {}).get('path'))
         references.extend(source.get(key) for key in ('path','boundary_path','roi_raster_path','dem_raster_path','executable'))
         protected=set()
         for raw in references:
@@ -241,6 +245,12 @@ class WorkbenchServer(ThreadingHTTPServer):
         config['output_root']=str(output)
         source=config.get('cell_source',{})
         inputs=[raster] if raster else []
+        if config.get('overview_dem'):
+            reference=config['overview_dem']
+            overview_dem=self.permitted(reference['path'])
+            if overview_dem.suffix.lower() not in RASTER_SUFFIXES or not overview_dem.is_file():
+                raise ValueError('DEM tham chiếu cần là GeoTIFF/ASC')
+            reference['path']=str(overview_dem);inputs.append(overview_dem)
         if config.get('resolution_reference'):
             reference=config['resolution_reference']
             planned=self.permitted(reference['path'])
@@ -432,6 +442,13 @@ class WorkbenchServer(ThreadingHTTPServer):
                 raster=self.permitted(data['raster_path'])
                 for file in raster_bundle_paths(raster): self.permitted(file)
             analysis_crs=metric_crs(mesh_data['crs_wkt']).to_wkt()
+            if raster is not None:
+                # Metadata/window admission precedes job creation, partitions and
+                # raster band reads. The worker repeats this and keeps runtime caps.
+                from .comparison import preflight_comparison
+                with authorized_reads(self.permitted):
+                    preflight_comparison(cells,raster,analysis_crs=analysis_crs,
+                        band=data['band'],semantics=data['semantics'],mesh_data=mesh_data)
             config={**copy.deepcopy(data),'baseline_mode':baseline_mode,'analysis_crs':analysis_crs,
                     'cells_path':str(cells),'edge_subdivisions':8}
             if raster is not None:config['raster_path']=str(raster)
@@ -514,6 +531,10 @@ class WorkbenchServer(ThreadingHTTPServer):
                         result.update(status='cancelled',error='Đã dừng theo yêu cầu')
                         comparison_manifest.update(status='cancelled',error=result['error'],artifact_hashes={},
                                         cancelled_stage=control.phase)
+                    if result['status']=='fail':
+                        result['failure']=describe_comparison_failure(result.get('error'))
+                    else:
+                        result.pop('failure',None)
                     if output and result['status']!='pass':
                         comparison_manifest.update(status=result['status'],error=result.get('error'),artifact_hashes={})
                         if result['status']=='cancelled': comparison_manifest.setdefault('cancelled_stage',control.phase)
@@ -656,6 +677,10 @@ class WorkbenchServer(ThreadingHTTPServer):
                         result.update(status='cancelled',error='Đã dừng theo yêu cầu')
                         inventory_manifest.update(status='cancelled',error=result['error'],artifact_hashes={},
                             cancelled_stage=control.phase)
+                    if result['status']=='fail':
+                        result['failure']=describe_comparison_failure(result.get('error'))
+                    else:
+                        result.pop('failure',None)
                     if output and result['status']!='pass':
                         try: write_json(output/'manifest.json',inventory_manifest)
                         except OSError as error: result['diagnostic_error']=str(error)
@@ -764,6 +789,8 @@ class Handler(BaseHTTPRequestHandler):
             parsed=urlsplit(self.path); path=parsed.path
             self.guard(api=path.startswith('/api/'))
             fonts = {'/fonts/SourceSans3-VF.ttf': 'SourceSans3-VF.ttf'}
+            if path == '/window_chrome.js':
+                return self.respond((ASSETS/'window_chrome.js').read_bytes(), content_type='text/javascript')
             if path in fonts:
                 return self.respond((ASSETS/'fonts'/fonts[path]).read_bytes(), content_type='font/ttf')
             if path in {'/','/app.js','/coach.js','/attribute_table.js','/downloads.js','/extraction_draft.js','/extraction_draft.css','/attribute_table.css','/workspace_layout.css','/style.css','/wizard.css','/icon.png','/favicon.ico','/quality_panel.js','/quality_panel.css','/quality_bridge.js','/comparison_view.js','/comparison_view.css'}:
@@ -773,7 +800,9 @@ class Handler(BaseHTTPRequestHandler):
                       'quality_panel.js':'text/javascript','quality_bridge.js':'text/javascript','quality_panel.css':'text/css','comparison_view.js':'text/javascript','comparison_view.css':'text/css',
                       'meshcherry-icon-v1.png':'image/png','meshcherry-icon-v1.ico':'image/vnd.microsoft.icon'}[name]
                 body=(ASSETS/name).read_bytes()
-                if name=='index.html':body=body.replace(b'{{APP_VERSION}}',__version__.encode('ascii'))
+                if name=='index.html':
+                    body=body.replace(b'{{APP_VERSION}}',__version__.encode('ascii'))
+                    body=body.replace(b'{{DESKTOP_CHROME}}',b'true' if callable(self.server.native_window_control) else b'false')
                 return self.respond(body,content_type=mime)
             if path=='/api/bootstrap':
                 gmsh_saved=self.server.saved_gmsh()
@@ -869,7 +898,7 @@ class Handler(BaseHTTPRequestHandler):
                 name=query.get('name',[''])[0]; artifact=self.server.artifact(query.get('id',[''])[0],name)
                 if query.get('view')==['1'] and query.get('download')!=['1'] and name in {'cells','attributes','qa'}:
                     return self.respond(artifact_view(name,_json(artifact)))
-                mime='image/png' if name=='preview' else 'text/csv' if name=='csv' else 'text/plain' if name in {'msh','gmsh_log'} else 'application/json'
+                mime='image/png' if name in {'preview','overview'} else 'text/csv' if name=='csv' else 'text/plain' if name in {'msh','gmsh_log'} else 'application/json'
                 return self.stream_file(artifact,content_type=mime,
                     filename=Path(ARTIFACTS[name]).name if query.get('download')==['1'] else None)
             self.respond(dict(error='Not found'),404)
@@ -917,6 +946,18 @@ class Handler(BaseHTTPRequestHandler):
             if not 0<count<=ceiling: return self.respond(dict(error='Request body size limit'),413)
             raw=self.rfile.read(count); self.body_consumed=True
             data=json.loads(raw,parse_constant=lambda value: (_ for _ in ()).throw(ValueError('nonfinite JSON')))
+            if path == '/api/window/control':
+                allowed = {'minimize','toggle_maximize','close',
+                           'resize-n','resize-ne','resize-e','resize-se',
+                           'resize-s','resize-sw','resize-w','resize-nw'}
+                if (not isinstance(data,dict) or set(data) != {'action'} or
+                        not isinstance(data['action'],str) or data['action'] not in allowed):
+                    raise ValueError('Thao tác cửa sổ không được hỗ trợ.')
+                callback=self.server.native_window_control
+                if not callable(callback):
+                    raise ValueError('Điều khiển cửa sổ chỉ có trong bản desktop.')
+                # Never hold the server lock across a native UI-thread call.
+                return self.respond(callback(data['action']))
             if path=='/api/extraction-draft/preview':
                 from .batch_api import draft_preview
                 return self.respond(draft_preview(self.server,data))
@@ -1036,7 +1077,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(self.server.start_job(data['preflight_id'],data.get('request_id')),202)
             self.respond(dict(error='Not found'),404)
         except AccessError as error: self.respond(dict(error=str(error)),403)
-        except Exception as error: self.respond(dict(error=str(error)),400)
+        except Exception as error:
+            body=dict(error=str(error))
+            if path in {'/api/comparison','/api/comparison/count'}:
+                body['failure']=describe_comparison_failure(error)
+            self.respond(body,400)
 
     def do_OPTIONS(self): self.respond(dict(error='Method not allowed'),405)
     do_PUT=do_DELETE=do_PATCH=do_OPTIONS

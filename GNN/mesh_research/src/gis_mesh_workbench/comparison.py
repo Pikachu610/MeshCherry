@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 import shapely
-from shapely.geometry import box
+from shapely.geometry import box, Polygon
 from shapely.ops import unary_union
 from shapely.strtree import STRtree
 
@@ -28,6 +28,51 @@ from .mesh_workflow import read_frozen
 from .raster_source import assert_unchanged, open_raster, snapshot
 from .spatial import metric_crs
 from .workload_limits import MAX_MESH_CELLS
+from .comparison_admission import estimate_read_workload
+
+
+def preflight_comparison(cells_path, raster_path, *, analysis_crs, band=1,
+                         semantics='intensive', mesh_data=None):
+    """Check aggregate window budgets without union, partitioning or band reads.
+
+    The API may call this before enqueue. compare_mesh repeats the same check
+    against its own accepted geometry, so this is not a cached authorization or
+    a replacement for runtime input identities and resource ceilings.
+    """
+    from .adapters import _json
+    from .workload_limits import MAX_MESH_BYTES
+    target = metric_crs(analysis_crs)
+    if mesh_data is None:
+        if Path(cells_path).stat().st_size > MAX_MESH_BYTES:
+            raise ValueError('Frozen mesh exceeds 64 MiB')
+        mesh_data = _json(Path(cells_path))
+    if (mesh_data.get('schema_version') != 'workbench-cells-v1'
+            or mesh_data.get('coordinate_units') != 'm'
+            or metric_crs(mesh_data.get('crs_wkt')) != target):
+        raise ValueError('Unsupported frozen mesh or CRS mismatch')
+    rows = mesh_data.get('cells')
+    if not isinstance(rows, list) or not 0 < len(rows) <= MAX_MESH_CELLS:
+        raise ValueError('Frozen cell limit')
+    if any(row.get('kind') != 'triangle' for row in rows):
+        raise ValueError('comparison requires an accepted triangular mesh')
+    # This estimate is not a geometry acceptance gate. Full frozen hashes,
+    # overlap QA and identity checks remain in compare_mesh, outside API locks.
+    triangles = []
+    for index, row in enumerate(rows):
+        if index % 256 == 0:
+            checkpoint()
+        xy = np.asarray(row.get('xy'), dtype=float)
+        if xy.shape != (3, 2) or not np.isfinite(xy).all():
+            raise ValueError('finite triangle XY coordinates required')
+        polygon = Polygon(xy)
+        if not polygon.is_valid or polygon.area <= 0:
+            raise ValueError('valid positive-area cell required')
+        triangles.append(polygon)
+    checkpoint()
+    tree = STRtree(triangles)
+    with open_raster(Path(raster_path)) as src:
+        return estimate_read_workload(src, target, tree, len(triangles),
+            band=band, semantics=semantics, cap=limits())
 
 
 def _square_partition(domain, size):
@@ -230,6 +275,11 @@ def compare_mesh(cells_path, raster_path, *, analysis_crs, cell_size_m=None,
         raise ValueError('comparison requires an accepted triangular mesh')
     triangles = _cells(frozen.cells)
     checkpoint()
+    cap = limits()
+    admission_tree = STRtree(triangles)
+    with open_raster(raster_path) as src:
+        admission = estimate_read_workload(src, target, admission_tree, len(triangles),
+            band=band, semantics=semantics, cap=cap)
     domain = unary_union(triangles)
     checkpoint()
     if baseline_mode == 'target_grid':
@@ -244,13 +294,13 @@ def compare_mesh(cells_path, raster_path, *, analysis_crs, cell_size_m=None,
                               if baseline_mode == 'target_grid' else [0]*9)
     zone_counts = dict(unstructured=mesh_zone_counts,
                        structured=structured_zone_counts)
-    trees = {name: STRtree(polys) for name, polys in parts.items()}
+    trees = {name: admission_tree if name == 'unstructured' else STRtree(polys)
+             for name, polys in parts.items()}
     geometry_parts = dict(parts, __domain__=domain)
     geometry_arrays = {name: tree.geometries for name, tree in trees.items()}
     chunk_pixels = geometry_chunk_pixels(geometry_parts)
     states = {name: [dict(area=0., mean=0., total=0., total_sum=_ExactFloatSum(), classes={}) for _ in polys]
               for name, polys in parts.items()}
-    cap = limits()
     raster_before = snapshot(raster_path)
     raster_hash = _digest(raster_path)
     support = 0.
@@ -281,7 +331,7 @@ def compare_mesh(cells_path, raster_path, *, analysis_crs, cell_size_m=None,
             crs=src.crs.to_string())
         aggregate = dict(windows_scanned=0, windows_read=0, pixels_read=0,
                          candidate_pairs=0, peak_window_pixels=0)
-        total_windows = sum(1 for _ in windows(src, band, cap))
+        total_windows = admission['windows_scanned_per_pass']
         cache_counts = dict(hits=0, misses=0, bytes=0,
                             status=('enabled' if _geometry_cache_bytes else 'disabled_by_budget')
                             if semantics == 'intensive' else 'not_applicable')
@@ -544,7 +594,7 @@ def compare_mesh(cells_path, raster_path, *, analysis_crs, cell_size_m=None,
             source_crs_wkt=source_crs, analysis_crs_wkt=target.to_wkt(), affine=affine, shape=shape,
             band=band, edge_subdivisions=edge_subdivisions, value_units=value_units,
             raster_resampling='none', area_model='projected planar; cross-CRS edges approximated'),
-        workload=dict(hard_limits=cap, max_cells=MAX_MESH_CELLS,
+        workload=dict(hard_limits=cap, max_cells=MAX_MESH_CELLS, admission=admission,
                       geometry_kernel=selected_kernel,
                       kernel_selection='bounded benchmark envelope; scalar fallback outside it' if _kernel=='auto' else 'explicit diagnostic override',
                       max_class_entries=MAX_CLASS_ENTRIES, passes=passes,

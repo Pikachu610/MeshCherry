@@ -71,6 +71,39 @@ def self_test(report, gmsh_path=None, boundary_path=None):
     grid = structured_grid(extent=[500000,1000000,500002,1000001],
         cell_width_m=1,cell_height_m=1,analysis_crs='EPSG:32649')
     triangle = import_mesh(root/'two_triangles.json',analysis_crs='EPSG:32649')
+    # Exercise the new count/admission/failure modules in the actual frozen
+    # runtime even when an external Gmsh installation is not supplied.
+    from gis_mesh_workbench.pixel_inventory import supports_hierarchy, hierarchical_count
+    from gis_mesh_workbench.comparison_admission import estimate_read_workload, ComparisonAdmissionError
+    from gis_mesh_workbench.comparison_failures import describe_comparison_failure
+    from gis_mesh_workbench.indexed_extraction import limits
+    from gis_mesh_workbench.raster_source import open_raster
+    from gis_mesh_workbench.spatial import metric_crs
+    from shapely.geometry import Polygon, box
+    from shapely.strtree import STRtree
+    target=metric_crs('EPSG:32649')
+    tree=STRtree([Polygon(cell.xy) for cell in triangle.cells])
+    with open_raster(root/'sample_10_30.tif') as source:
+        if not supports_hierarchy(source,target):
+            raise RuntimeError('Frozen native pixel hierarchy unavailable')
+        count=hierarchical_count(source,box(500000,1000000,500002,1000001),
+            target,(0,0,2,1))
+        if count!=2:raise RuntimeError('Frozen geometric pixel count differs')
+        budget=estimate_read_workload(source,target,tree,len(triangle.cells),
+            band=1,semantics='intensive',cap=limits())
+        if budget['aggregate_pixels_read']!=4 or budget['pass_count']!=2:
+            raise RuntimeError('Frozen comparison two-pass admission differs')
+        try:
+            estimate_read_workload(source,target,tree,len(triangle.cells),
+                band=1,semantics='intensive',cap=limits({'max_pixels_read':3}))
+        except ComparisonAdmissionError as error:
+            guidance=describe_comparison_failure(error)
+            if not guidance['actions'] or not guidance['message']:
+                raise RuntimeError('Frozen comparison failure guidance unavailable')
+        else:
+            raise RuntimeError('Frozen comparison admitted an over-budget job')
+    checks['pixel_inventory_and_admission']=dict(status='pass',geometric_pixels=count,
+        intensive_read_pixels=4,rejected_cap=3,failure_guidance=True)
     for name, cells, expected in (('grid',grid,[10,30]),('triangles',triangle,[25,15])):
         result = extract_attributes(root/'sample_10_30.tif',cells.cells,
             cell_crs='EPSG:32649',analysis_crs='EPSG:32649',band=1,

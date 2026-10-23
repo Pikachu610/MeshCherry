@@ -6,6 +6,7 @@ import threading
 
 from .onboarding import preference_path
 from .gmsh_preferences import migrate_legacy
+from .native_chrome import install_window_controls
 from .webui import ASSETS, WORKSPACE, WorkbenchServer
 
 
@@ -40,9 +41,15 @@ def launch(workspace=WORKSPACE, webview_module=None, preferences=None, startup_p
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        window = webview_module.create_window('MeshCherry · Bản đồ nhỏ, ý tưởng lớn',
+        windows_chrome = os.name == 'nt'
+        # pywebview uses this selector only for frameless windows. Keep the drag
+        # target explicit so titlebar buttons and menus remain interactive.
+        if windows_chrome:
+            webview_module.settings['DRAG_REGION_SELECTOR'] = '.pywebview-drag-region'
+        window = webview_module.create_window('MeshCherry',
             server.origin + '/#token=' + server.token, width=1280, height=860,
-            min_size=(820, 620))
+            min_size=(820, 620), frameless=windows_chrome,
+            easy_drag=False if windows_chrome else True)
         def native_picker(kind):
             filters = {'raster': ('Raster GeoTIFF and ASC (*.tif;*.tiff;*.asc)',),
                        'raster_many': ('Raster GeoTIFF and ASC (*.tif;*.tiff;*.asc)',),
@@ -67,6 +74,11 @@ def launch(workspace=WORKSPACE, webview_module=None, preferences=None, startup_p
                         any(job['status'] in {'running','stopping'} for job in server.jobs.values())):
                     return False
         window.events.closing += closing
+        # Register before start(): the server exposes controls to HTML only if
+        # this native callback exists, and pywebview creates its native form in
+        # start().
+        server.native_window_control = install_window_controls(
+            window, closing, windows_chrome=windows_chrome)
         # No privileged js_api is exposed. Closing the window returns start().
         webview_module.start(gui='edgechromium', private_mode=True,
             icon=str(ASSETS / 'meshcherry-icon-v1.ico'))

@@ -40,6 +40,8 @@ def effective_config(path):
             config[field] = str((path.parent / config[field]).resolve())
     if isinstance(config.get('resolution_reference'),dict) and config['resolution_reference'].get('path'):
         config['resolution_reference']['path']=str((path.parent/config['resolution_reference']['path']).resolve())
+    if isinstance(config.get('overview_dem'),dict) and config['overview_dem'].get('path'):
+        config['overview_dem']['path']=str((path.parent/config['overview_dem']['path']).resolve())
     source = config.get('cell_source')
     if isinstance(source, dict) and isinstance(source.get('path'), str):
         source['path'] = str((path.parent / source['path']).resolve())
@@ -110,6 +112,20 @@ def validate_config(config):
         raise ValueError('Cấu hình phải là một đối tượng JSON.')
     source=config.get('cell_source')
     if not isinstance(source,dict):source={}
+    if 'boundary_preparation' in source:
+        preparation=source['boundary_preparation']
+        keys={'tolerance_m','max_area_change_fraction','max_boundary_distance_m'}
+        if (source.get('kind')!='gmsh_generated' or not source.get('boundary_path')
+                or not isinstance(preparation,dict) or not keys.issubset(preparation)
+                or set(preparation)-keys-{'method'}):
+            raise ValueError('Biên dẫn xuất chỉ dùng với miền SHP; cần đủ dung sai, giới hạn diện tích và khoảng cách.')
+        if (not isinstance(preparation.get('method','topology_preserving'),str)
+                or preparation.get('method','topology_preserving') not in {'topology_preserving','gnn_closed_rdp'}):
+            raise ValueError('Phương pháp xử lý biên không hợp lệ; chọn giữ topology hoặc RDP vòng kín GNN.')
+        if any(isinstance(preparation[k],bool) or not isinstance(preparation[k],(int,float)) or not math.isfinite(preparation[k]) or preparation[k]<=0 for k in keys):
+            raise ValueError('Các giới hạn biên dẫn xuất phải là số dương hữu hạn.')
+        if preparation['max_area_change_fraction']>.05:
+            raise ValueError('Giới hạn diện tích khác biệt của biên dẫn xuất không được vượt 5%.')
     if source.get('kind')=='gmsh_generated' and 'advanced' in source:
         from .meshing_parameters import validate_advanced_meshing
         validate_advanced_meshing(source)

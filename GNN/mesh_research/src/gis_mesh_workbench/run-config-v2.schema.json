@@ -104,6 +104,17 @@
               "type": "string",
               "minLength": 1
             },
+            "boundary_preparation": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["tolerance_m", "max_area_change_fraction", "max_boundary_distance_m"],
+              "properties": {
+                  "method": {"enum": ["topology_preserving", "gnn_closed_rdp"]},
+                "tolerance_m": {"type": "number", "exclusiveMinimum": 0},
+                "max_area_change_fraction": {"type": "number", "exclusiveMinimum": 0, "maximum": 0.05},
+                "max_boundary_distance_m": {"type": "number", "exclusiveMinimum": 0}
+              }
+            },
             "extent": {
               "type": "array",
               "minItems": 4,
@@ -178,6 +189,10 @@
             }
           },
           "allOf": [
+            {
+              "if": {"required": ["boundary_preparation"]},
+              "then": {"required": ["boundary_path"]}
+            },
             {
               "if": {
                 "properties": {
@@ -380,6 +395,15 @@
         "mesh_only",
         "extract"
       ]
+    },
+    "overview_dem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "band"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "band": {"type": "integer", "minimum": 1}
+      }
     },
     "resolution_reference": {
       "type": "object",

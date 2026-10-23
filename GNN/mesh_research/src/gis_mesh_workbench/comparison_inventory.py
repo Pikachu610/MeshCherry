@@ -13,6 +13,7 @@ from .extraction import _cells, _digest
 from .indexed_extraction import footprint
 from .job_control import checkpoint, observe
 from .mesh_workflow import read_frozen
+from .pixel_inventory import hierarchical_count, supports_hierarchy
 from .raster_source import open_raster
 from .spatial import metric_crs
 from .workload_limits import MAX_MESH_CELLS
@@ -95,6 +96,15 @@ def _native_pixel_count(raster_path, domain, analysis_crs, progress=None):
             # A transformed ROI bound is not a safe source-pixel enclosure.
             col0=row0=0;col1=src.width;row1=src.height
         total = int((col1-col0)*(row1-row0))
+        if supports_hierarchy(src, target):
+            count = hierarchical_count(src, domain, target,
+                (col0, row0, col1, row1), progress)
+            return count, dict(width=src.width, height=src.height, crs=src.crs.to_string(),
+                transform=list(src.transform), shape=[src.height, src.width],
+                source_pixel_count=int(src.width*src.height), candidate_pixel_count=total,
+                edge_subdivisions=8, footprint_approximate=False,
+                area_model='projected planar; cross-CRS edges approximated',
+                count_policy='positive-area intersections under the declared footprint model')
         count = 0
         completed = 0
         # Metadata-only count: do not read a band, mask, or NoData values.
@@ -109,6 +119,7 @@ def _native_pixel_count(raster_path, domain, analysis_crs, progress=None):
                 completed += 1
                 if progress is not None and (completed % 256 == 0 or completed == total):
                     progress('count_native_pixels', completed, total, 'source_pixels_examined')
+        checkpoint()
         return count, dict(width=src.width, height=src.height, crs=src.crs.to_string(),
             transform=list(src.transform), shape=[src.height, src.width],
             source_pixel_count=int(src.width*src.height), candidate_pixel_count=total,

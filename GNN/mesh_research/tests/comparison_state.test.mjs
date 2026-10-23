@@ -86,6 +86,19 @@ test('comparison ETA uses only current backend phase bounds and never prior task
   assert.doesNotMatch(h.elements['comparison-count-progress-label'].textContent,/còn khoảng/);
 });
 
+test('native pixel progress distinguishes accounted candidates from valid pixels', () => {
+  const h=comparisonHarness(async()=>({}));
+  const phase='count_native_pixels';
+  h.actions.formatPhaseProgress({monitor:{phase,elapsed_seconds:27,
+    phase_progress:{phase,scope:'phase',completed:342272,total:1876759,unit:'source_pixels_examined'}}},'count');
+  const text=h.elements['comparison-count-progress-label'].textContent;
+  assert.match(text,/miền lưới/);
+  assert.match(text,/theo hình học/);
+  assert.match(text,/342\.272 \/ 1\.876\.759/);
+  assert.match(text,/không phải số ô hợp lệ/);
+  assert.equal(h.elements['comparison-count-progress'].value,342272);
+});
+
 test('estimate mode retains an enabled labelled action and submits without any raster', async () => {
   let submitted;
   const h=comparisonHarness(async (path,body)=>{
@@ -186,7 +199,7 @@ test('inventory labels use backend definitions for source pixels and clipped tar
     count: 21, definition: 'source_pixels_with_positive_area_intersection_with_mesh_union',
   } };
   h.actions.renderComparisonCounts();
-  assert.equal(h.elements['comparison-baseline-label'].textContent, 'Pixel hình học raster · giao diện tích dương với ROI');
+  assert.equal(h.elements['comparison-baseline-label'].textContent, 'Pixel giao miền lưới · đếm hình học');
   const gridKey = JSON.stringify(['mesh-1', 'target_grid', null, 30]);
   h.elements['comparison-mode'].value = 'target_grid';
   h.context.comparisonCountKey = gridKey;

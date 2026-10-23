@@ -24,6 +24,26 @@ let sourceRequest=0,boundaryRequest=0,gmshRequest=0,toastTimer=null,selectedCell
 let mapDrag=null,mapSuppressClick=false;
 let batchedMap=null;
 let previewRequest=0,previewKey='',previewURL=null,savedMap=null,resultTab='mesh';
+let overviewRequest=0,overviewURL=null,overviewMeshId=null;
+const overviewPanel=document.createElement('section'),overviewTitle=document.createElement('h3'),overviewImage=document.createElement('img'),overviewStatus=document.createElement('p'),overviewSave=document.createElement('button');
+overviewPanel.id='run-overview-panel';overviewPanel.className='run-overview';overviewPanel.hidden=true;overviewTitle.textContent='Tổng kết lượt tạo lưới';overviewImage.alt='DEM, trường kích thước, toàn cảnh lưới và vùng phóng to của lượt chạy';overviewImage.hidden=true;overviewStatus.setAttribute('role','status');overviewSave.type='button';overviewSave.textContent='Lưu hình tổng kết PNG';overviewSave.hidden=true;overviewPanel.append(overviewTitle,overviewStatus,overviewImage,overviewSave);$('job-console-panel').before(overviewPanel);
+function clearRunOverview(){overviewRequest++;overviewMeshId=null;overviewImage.onload=null;overviewImage.onerror=null;overviewImage.hidden=true;overviewImage.removeAttribute('src');overviewSave.hidden=true;if(overviewURL)URL.revokeObjectURL(overviewURL);overviewURL=null;overviewPanel.hidden=true;}
+async function loadRunOverview(){
+  const mesh=meshSnapshot;if(!mesh){clearRunOverview();return;}
+  if(overviewMeshId===mesh.jobId&&overviewURL)return;
+  clearRunOverview();const request=overviewRequest,id=mesh.jobId;overviewMeshId=id;overviewPanel.hidden=false;
+  if(mesh.qa?.run_overview?.status!=='pass'){overviewStatus.textContent=mesh.qa?.run_overview?.message||'Lượt lưới này chưa có hình tổng kết. Hình sẽ được tạo khi chia lưới bằng phiên bản mới.';return;}
+  overviewStatus.textContent='Đang tải hình của lượt lưới đã chấp nhận…';
+  try{
+    const response=await fetch(`/api/artifact?id=${encodeURIComponent(id)}&name=overview`,{headers:{'X-Workbench-Token':token}});
+    if(!response.ok)throw Error('Không tải được hình tổng kết.');
+    const blob=await response.blob();if(blob.type!=='image/png'||blob.size>16*1024*1024)throw Error('Ảnh tổng kết không hợp lệ hoặc quá lớn.');
+    if(request!==overviewRequest||meshSnapshot?.jobId!==id)return;
+    overviewURL=URL.createObjectURL(blob);overviewImage.onload=()=>{if(request===overviewRequest&&meshSnapshot?.jobId===id){overviewImage.hidden=false;overviewStatus.textContent='Hình từ dữ liệu thực của lượt tạo lưới đã chấp nhận.';overviewSave.hidden=false;}};
+    overviewImage.onerror=()=>{if(request===overviewRequest){clearRunOverview();overviewPanel.hidden=false;overviewStatus.textContent='Không hiển thị được hình tổng kết. Lưới và kết quả khác vẫn được giữ.';}};overviewImage.src=overviewURL;
+  }catch(error){if(request===overviewRequest&&meshSnapshot?.jobId===id){overviewMeshId=null;overviewStatus.textContent=error.message+' Lưới vẫn được giữ nguyên; mở lại Nhật ký để thử tải lại.';}}
+}
+overviewSave.onclick=()=>{const id=overviewMeshId;if(!id||meshSnapshot?.jobId!==id)return;managedDownload({url:`/api/artifact?id=${encodeURIComponent(id)}&name=overview&download=1`,filename:'meshcherry-run-overview.png',kind:'artifact',payload:{job_id:id,name:'overview'}}).catch(error=>toast(error.message));};
 let demPreviewRequest=0,demPreviewKey='',demPreviewURL=null;
 let jobLogCursor=0,monitorJobId=null,cancelPending=false;
 let comparisonReport=null,comparisonJobId=null,comparisonRequest=0,comparisonRequestKey='',comparisonEvaluationKey='',comparisonReadFailures=0,comparisonOwnsBusy=false;
@@ -96,7 +116,7 @@ function openRemeshFromMenu(){if(busy||(typeof qualityBusy!=='undefined'&&qualit
 function openVariationFromTools(){if(busy||(typeof qualityBusy!=='undefined'&&qualityBusy))return;$('tools-dialog').close();$('mode').value='gmsh_generated';$('gmsh-sizing').value='sf1_relief';invalidate();mode();stage(2);$('dem-raster').focus();}
 async function restoreRemeshDraft(){
   if(!meshSnapshot||busy||(typeof qualityBusy!=='undefined'&&qualityBusy))return;
-  const requestedMesh=meshSnapshot,requestedRevision=revision;
+  const requestedMesh=meshSnapshot,requestedRevision=revision;let discardedOrphanedBoundaryPreparation=false;
   try{
     const response=await api(`/api/mesh-config?id=${encodeURIComponent(requestedMesh.jobId)}`);
     if(meshSnapshot!==requestedMesh||revision!==requestedRevision||busy||(typeof qualityBusy!=='undefined'&&qualityBusy))return;
@@ -119,11 +139,22 @@ async function restoreRemeshDraft(){
       if(sourceConfig.extent)['west','south','east','north'].forEach((id,index)=>$(id).value=sourceConfig.extent[index]);
       if(sourceConfig.h_max_m)$('h-max').value=sourceConfig.h_max_m;if(sourceConfig.h_min_m)$('h-min').value=sourceConfig.h_min_m;
       if(sourceConfig.dem_raster_path)$('dem-raster').value=sourceConfig.dem_raster_path;if(sourceConfig.dem_band)$('dem-band').value=sourceConfig.dem_band;
+      if(cfg.overview_dem){$('dem-raster').value=cfg.overview_dem.path||'';$('dem-band').value=cfg.overview_dem.band??1;}
       if(sourceConfig.relief_radius_m)$('relief-radius').value=sourceConfig.relief_radius_m;if(sourceConfig.sf1_scale)$('sf1-scale').value=sourceConfig.sf1_scale;
+      if($('boundary-preparation-enabled')){
+        const preparation=sourceConfig.boundary_preparation;
+        const boundaryAvailable=Boolean(sourceConfig.boundary_path),restorePreparation=boundaryAvailable&&Boolean(preparation);
+        discardedOrphanedBoundaryPreparation=Boolean(preparation)&&!boundaryAvailable;
+        $('boundary-preparation-enabled').checked=restorePreparation;
+        $('boundary-method').value=restorePreparation&&preparation.method==='gnn_closed_rdp'?'gnn_closed_rdp':'topology_preserving';
+        $('boundary-tolerance').value=restorePreparation?(preparation.tolerance_m??''):'';
+        $('boundary-distance').value=restorePreparation?(preparation.max_boundary_distance_m??''):'';
+        $('boundary-area-percent').value=restorePreparation?preparation.max_area_change_fraction*100:1;
+      }
       const advanced=sourceConfig.advanced||{};gmshAdvancedEnabled=!!sourceConfig.advanced;$('gmsh-advanced-enabled').checked=gmshAdvancedEnabled;
       if(advanced.algorithm_2d)$('gmsh-algorithm').value=advanced.algorithm_2d;$('gmsh-smoothing').value=advanced.smoothing??0;$('gmsh-optimize').value=advanced.optimize_2d??0;
     }
-    preserveAcceptedDuringRun=true;revision++;preflightId=null;mode();showRemeshDraftButton();stage(2);$('validation').className='info muted';$('validation').textContent='Đã khôi phục cấu hình từ lượt chạy đã lưu. Lưới hiện tại vẫn được giữ đến khi lượt chạy mới hoàn tất.';$('run').disabled=true;
+    preserveAcceptedDuringRun=true;revision++;preflightId=null;mode();showRemeshDraftButton();stage(2);$('validation').className='info muted';$('validation').textContent=discardedOrphanedBoundaryPreparation?'Đã khôi phục cấu hình. Tệp SHP gốc không còn trong hồ sơ nên tùy chọn biên dẫn xuất đã được bỏ; SHP mới sẽ dùng biên gốc cho đến khi bạn bật lại. Lưới hiện tại vẫn được giữ đến khi lượt chạy mới hoàn tất.':'Đã khôi phục cấu hình từ lượt chạy đã lưu. Lưới hiện tại vẫn được giữ đến khi lượt chạy mới hoàn tất.';$('run').disabled=true;
   }catch(error){toast('Không khôi phục được cấu hình: '+error.message);}
 }
 function mountSingleAttributeTable(){
@@ -381,7 +412,7 @@ function releaseDemPreview(){const image=$('dem-preview-image');image.onload=nul
 function clearDemPreview(){demPreviewRequest++;demPreviewKey='';releaseDemPreview();$('dem-preview').hidden=true;$('dem-preview-status').textContent='Chọn DEM để xem trước.';$('dem-preview-meta').replaceChildren();$('dem-preview-caption').textContent='Màu P2–P98 chỉ phục vụ hiển thị.';}
 async function loadDemPreview(){
   const path=$('dem-raster').value.trim(),sizing=$('gmsh-sizing').value;
-  if(!path||$('mode').value!=='gmsh_generated'||currentStage!==2||!['relief','sf1_relief'].includes(sizing)){clearDemPreview();return;}
+  if(!path||$('mode').value!=='gmsh_generated'||currentStage!==2){clearDemPreview();return;}
   const key=demPreviewIdentity(),request=++demPreviewRequest;demPreviewKey=key;$('dem-preview').hidden=false;releaseDemPreview();$('dem-preview-meta').replaceChildren();$('dem-preview-caption').textContent='';$('dem-preview-status').textContent='Đang dựng hình DEM…';
   const bandValue=$('dem-band').value.trim(),band=Number(bandValue);
   if(!/^\d+$/.test(bandValue)||!Number.isSafeInteger(band)||band<1){fieldError('dem-band','dem-band-error','Nhập band DEM là số nguyên dương.');$('dem-preview-status').textContent='Band DEM không hợp lệ.';return;}
@@ -405,7 +436,7 @@ function showResultTab(value){
   if(!['mesh','extract','log'].includes(value))return;
   resultTab=value;document.body.dataset.result=value;markWorkspace(value==='mesh'?'mesh':value);
   for(const tab of ['mesh','extract','log']){const panel=$(tab==='mesh'?'mesh-result-panel':tab==='extract'?'extract-result-panel':'result-log-panel');panel.hidden=tab!==value;panel.setAttribute('aria-hidden',String(tab!==value));}
-  if(value==='log')return;
+  if(value==='log'){loadRunOverview();return;}
   $('result-map-title').textContent=value==='mesh'?'Lưới đã tạo':'Thuộc tính trên lưới';
   if(savedMap){const view=mapView();draw(savedMap.cells,value==='extract'?savedMap.records:[],{...savedMap.contract,footprint:value==='extract'?savedMap.contract.footprint:null,attributeSummary:value==='extract'?savedMap.contract.attributeSummary:null},false);if(view)$('map').setAttribute('viewBox',view.join(' '));}
 }
@@ -527,7 +558,7 @@ function stage(value,moveFocus=true,internalRestore=false){
   if(value===4&&(!jobId||!displayCellCount()))return;
   currentStage=value;markWorkspace(value===1?'roi':value===4?resultTab==='extract'?'extract':resultTab==='log'?'log':'mesh':'mesh');
   if(value===4&&$('job-monitor').hidden){$('job-monitor').hidden=false;$('monitor-phase').textContent='Lưới đã sẵn sàng';$('monitor-elapsed').textContent='—';$('monitor-percent').textContent='Chưa có tác vụ đang chạy';$('monitor-eta').textContent='—';$('cancel-run').disabled=true;}
-  if(value!==2)clearDemPreview();else if(['relief','sf1_relief'].includes($('gmsh-sizing').value)&&$('dem-raster').value.trim())loadDemPreview();
+  if(value!==2)clearDemPreview();else if($('dem-raster').value.trim())loadDemPreview();
   visitedStages.add(value);document.body.dataset.stage=String(value);
   for(const panel of document.querySelectorAll('[data-panel]'))panel.hidden=Number(panel.dataset.panel)!==value;
   for(const button of document.querySelectorAll('button[data-stage]')){button.setAttribute('aria-current',Number(button.dataset.stage)===value?'step':'false');button.classList.toggle('visited',visitedStages.has(Number(button.dataset.stage)));}
@@ -636,7 +667,7 @@ async function api(path,data,timeout=0){
   const controller=timeout&&typeof AbortController!=='undefined'?new AbortController():null;
   const timer=controller?setTimeout(()=>controller.abort(),timeout):null;
   try{const response=await fetch(path,{method:data===undefined?'GET':'POST',headers:{'X-Workbench-Token':token,...(data===undefined?{}:{'Content-Type':'application/json'})},body:data===undefined?undefined:JSON.stringify(data),...(controller?{signal:controller.signal}:{})});
-    const value=await response.json();if(!response.ok){const error=new Error(value.error||`HTTP ${response.status}`);error.status=response.status;throw error;}return value;
+    const value=await response.json();if(!response.ok){const error=new Error(value.error||`HTTP ${response.status}`);error.status=response.status;error.failure=value.failure;throw error;}return value;
   }finally{if(timer!==null)clearTimeout(timer);}
 }
 function downloadQuality(_path,payload){
@@ -701,7 +732,9 @@ function drawQualityOverlay(){
 function loadQualityReport(result){qualityReport=result;qualityPanel?.load(result);drawQualityOverlay();}
 function readableExtractError(message){const text=String(message||'');if(/band.*out of range/i.test(text))return 'Band đã chọn không có trong raster. Chọn band từ 1 đến số band của tệp.';return text;}
 function toast(message){clearTimeout(toastTimer);$('toast').textContent=message;$('toast').hidden=false;toastTimer=setTimeout(()=>{$('toast').hidden=true;},7000);}
+window.MeshCherryChrome?.init({request:api,onError:error=>toast(error.message)});
 function resetResult(){
+  clearRunOverview();
   jobLogCursor=0;monitorJobId=null;cancelPending=false;$('job-log').textContent='';$('log-notice').textContent='';$('job-monitor').hidden=true;$('monitor-failure').hidden=true;$('job-log-download').hidden=true;$('cancel-run').disabled=true;
   terminalArtifactFailureJobId=null;terminalArtifactFailureCount=0;terminalArtifactIncompleteJobId=null;terminalArtifactRetryButton?.remove?.();terminalArtifactRetryButton=null;
   savedMap=null;resultTab='mesh';document.body.dataset.result='mesh';
@@ -721,6 +754,10 @@ function startAnother(){
   sourceRequest++;boundaryRequest++;exitTutorial();tutorialClicks.clear();visitedStages.clear();
   source=null;plannedSource=null;plannedRequest++;$('planned-raster').value='';meshSnapshot=null;clearAcceptedMesh();extractMode=false;invalidate();resetResult();
   $('raster').value='';$('mesh').value='';$('boundary-path').value='';$('gmsh-domain').value='raster';$('mode').value='gmsh_generated';
+  if($('boundary-preparation-enabled')){
+    $('boundary-preparation-enabled').checked=false;$('boundary-method').value='topology_preserving';
+    $('boundary-tolerance').value='';$('boundary-distance').value='';$('boundary-area-percent').value='1';
+  }
   $('source-info').className='info muted';$('boundary-info').className='info';
   $('source-summary').textContent='Chọn GeoTIFF / ASC của bạn.';$('source-diagnostics-content').replaceChildren();$('source-diagnostics').open=false;$('source-warning').hidden=true;$('source-warning').textContent='';$('boundary-info').textContent='Chưa đọc ranh giới.';
   mode();helpers();stage(1);
@@ -739,6 +776,13 @@ function mode(){
   if(previewKey&&previewKey!==previewIdentity())clearInputPreview();
   const domain=$('gmsh-domain').value,shp=domain==='shapefile';
   $('boundary-info').hidden=!shp;
+  if($('boundary-preparation-options')){
+    $('boundary-preparation-options').hidden=!shp;
+    const enabled=shp&&Boolean($('boundary-preparation-enabled')?.checked);
+    $('boundary-method').disabled=!enabled||busy||(typeof qualityBusy!=='undefined'&&qualityBusy);
+    for(const id of ['boundary-tolerance','boundary-distance','boundary-area-percent'])if($(id))$(id).disabled=!enabled||busy||(typeof qualityBusy!=='undefined'&&qualityBusy);
+    $('apply-gnn-boundary').disabled=busy||(typeof qualityBusy!=='undefined'&&qualityBusy);
+  }
   if(shp)$('mode').value='gmsh_generated';
   const value=$('mode').value,sf1=value==='gmsh_generated'&&$('gmsh-sizing').value==='sf1_relief',relief=value==='gmsh_generated'&&['relief','sf1_relief'].includes($('gmsh-sizing').value);
   $('mesh-method-label').textContent=value==='gmsh_generated'?'Tạo lưới tam giác bằng Gmsh':value==='mesh_artifact'?'Mesh tam giác nhập từ JSON':'Lưới vuông · cấu hình đã lưu / hướng dẫn';
@@ -756,11 +800,13 @@ function mode(){
   for(const button of document.querySelectorAll('[data-mode]')){button.setAttribute('aria-pressed',String(button.dataset.mode===value));button.disabled=busy||(shp&&button.dataset.mode!=='gmsh_generated');}
   for(const option of $('mode').querySelectorAll('option'))option.disabled=shp&&option.value!=='gmsh_generated';
   for(const id of ['dem-options','h-min-control','relief-controls'])$(id).hidden=!relief;
+  $('dem-options').hidden=value!=='gmsh_generated';
+  document.querySelector('label[for="dem-raster"]').textContent=relief?'DEM cao độ · nguồn tính relief':'DEM tham chiếu · tùy chọn, chỉ hiển thị trong hình tổng kết';
   $('sf1-controls').hidden=!sf1;$('relief-controls').hidden=!relief||sf1;
   $('h-min').readOnly=sf1;$('h-max').readOnly=sf1;if(sf1){$('h-min').value='250';$('h-max').value='1000';}
   $('h-min-help').textContent=sf1?'Hồ sơ SF-1 cố định 250 m trước scale và gradation.':'Nhập số dương, không lớn hơn h_max. Nhỏ hơn cho phép chia mịn hơn ở nơi relief cao.';
   $('h-max-label').textContent=relief?'h_max · kích thước mục tiêu lớn nhất (m)':'h · kích thước mục tiêu (m)';
-  if(relief&&currentStage===2&&$('dem-raster').value.trim()){if(demPreviewKey!==demPreviewIdentity())loadDemPreview();}else clearDemPreview();
+  if(value==='gmsh_generated'&&currentStage===2&&$('dem-raster').value.trim()){if(demPreviewKey!==demPreviewIdentity())loadDemPreview();}else clearDemPreview();
   $('h-max-help').textContent=sf1?'Hồ sơ SF-1 cố định 1000 m. h_scaled = clip(scale × h_raw, 250, 1000), sau đó giới hạn gradation.':relief?'Nhập số dương ≥ h_min. Vùng ít relief, thiếu DEM hoặc relief không đổi dùng h_max.':'Nhập kích thước mục tiêu theo mét, ví dụ 250. Kích thước cạnh thực tế được thống kê sau khi tạo lưới.';
   const subdivisionsRelevant=extractMode||(domain==='raster'&&!sameCRS());
   $('subdivisions').hidden=!subdivisionsRelevant;$('subdivisions-label').hidden=!subdivisionsRelevant;
@@ -769,6 +815,7 @@ function mode(){
   for(const card of document.querySelectorAll('.formula-relief'))card.hidden=!relief||sf1;
   for(const card of document.querySelectorAll('.formula-sf1'))card.hidden=!sf1;
   const required=new Set(['crs','output']);
+  if(shp&&$('boundary-preparation-enabled')?.checked)for(const id of ['boundary-method','boundary-tolerance','boundary-distance','boundary-area-percent'])required.add(id);
   if(value==='mesh_artifact')required.add('mesh');
   else if(shp)required.add('boundary-path');
   else if(domain==='raster'){required.add('raster');required.add('band');}
@@ -864,7 +911,10 @@ function applyResolution(){
 }
 function requestRows(q){
   const rows=[['Phương pháp',q.mode],['ROI',(q.roi_type||'Miền của mesh nhập')+' · '+(Array.isArray(q.roi_source)?q.roi_source.join(', '):q.roi_source)],['CRS tính toán',q.analysis_crs],['Giới hạn an toàn',q.max_cells+' ô']];
-  if(q.boundary_vertices)rows.push(['Điểm biên nguồn / sau đổi CRS',q.boundary_vertices.source+' / '+q.boundary_vertices.transformed],['Đường biên','Giữ nguyên · không giản lược']);
+  if(q.boundary_vertices)rows.push(['Điểm biên nguồn / sau đổi CRS',q.boundary_vertices.source+' / '+q.boundary_vertices.transformed],['Đường biên',q.boundary_vertices.simplification_applied?'Biên dẫn xuất · đã qua kiểm định':'Giữ nguyên · không giản lược']);
+  if(q.boundary_preparation)rows.push(['Phương pháp biên',q.boundary_preparation.method==='gnn_closed_rdp'?'GNN · RDP vòng kín':'Giản lược giữ topology'],['Dung sai giản lược',q.boundary_preparation.tolerance_m+' m'],['Giới hạn lệch biên',q.boundary_preparation.max_boundary_distance_m+' m'],['Giới hạn diện tích khác biệt',concise(q.boundary_preparation.max_area_change_fraction*100)+'%']);
+  if(q.derived_boundary)rows.push(['Số đoạn biên gốc → dẫn xuất',q.derived_boundary.source.segment_count+' → '+q.derived_boundary.derived.segment_count],['Diện tích khác biệt đã đo',concise(q.derived_boundary.symmetric_difference_fraction*100)+'%'],['Cận trên lệch biên đã đo',concise(q.derived_boundary.boundary_distance.upper_bound_m)+' m']);
+  if(q.derived_boundary?.added_area_m2!==undefined)rows.push(['Diện tích thêm / bớt so với ROI gốc',concise(q.derived_boundary.added_area_m2)+' / '+concise(q.derived_boundary.removed_area_m2)+' m²']);
   for(const warning of q.boundary_warnings||[])rows.push(['Thời gian xử lý',warning]);
   if(q.source_crs)rows.push(['CRS nguồn → tính toán',q.source_crs+' → '+q.analysis_crs]);
   if(q.requested_target_size_m!==undefined)rows.push(['h mục tiêu',concise(q.requested_target_size_m)+' m']);
@@ -935,6 +985,11 @@ function config(){
   if(kind==='gmsh_generated'&&$('gmsh-domain').value==='shapefile'){
     if(!$('boundary-path').value.trim())throw new Error('Chưa chọn ranh giới SHP');
     cell_source.boundary_path=$('boundary-path').value.trim();
+    if($('boundary-preparation-enabled')?.checked){
+      const tolerance=Number($('boundary-tolerance').value),distance=Number($('boundary-distance').value),area=Number($('boundary-area-percent').value);
+      if(!Number.isFinite(tolerance)||tolerance<=0||!Number.isFinite(distance)||distance<=0||!Number.isFinite(area)||area<=0||area>5)throw Error('Biên dẫn xuất: nhập dung sai và sai lệch dương; diện tích khác biệt trong khoảng lớn hơn 0 đến 5%.');
+      cell_source.boundary_preparation={tolerance_m:tolerance,max_boundary_distance_m:distance,max_area_change_fraction:area/100,...($('boundary-method').value==='gnn_closed_rdp'?{method:'gnn_closed_rdp'}:{})};
+    }
   }
   if(['gmsh_generated','structured_grid'].includes(kind)&&$('gmsh-domain').value==='raster')cell_source.roi_raster_path=$('raster').value.trim();
   if(kind==='gmsh_generated'){
@@ -951,7 +1006,8 @@ function config(){
   const meshOnly=true;
   if(meshOnly&&kind==='structured_grid'&&$('gmsh-domain').value==='raster'&&source?.display_footprint){const f=source.display_footprint;if(f.approximate||f.xy.length!==4||f.xy.some(p=>![f.bounds[0],f.bounds[2]].includes(p[0])||![f.bounds[1],f.bounds[3]].includes(p[1])))throw new Error('ROI raster xoay hoặc đổi CRS: chọn Gmsh để giữ đúng biên ROI.');}
   const resolution_reference=$('gmsh-domain').value!=='raster'&&$('planned-raster').value.trim()?{path:$('planned-raster').value.trim(),band:number('planned-band')}:null;
-  return {...(resolution_reference?{resolution_reference}:{}),schema_version:'gis-workbench-run-config-v2',operation:'mesh_only',extraction_engine:'indexed_windowed_v1',run_name:'mesh-cherry-ui',analysis_crs:$('crs').value.trim(),output_root:$('output').value,cell_source,edge_subdivisions:number('subdivisions')};
+  const overview_dem=kind==='gmsh_generated'&&cell_source.sizing==='uniform'&&$('dem-raster').value.trim()?{path:$('dem-raster').value.trim(),band:number('dem-band')}:null;
+  return {...(resolution_reference?{resolution_reference}:{}),...(overview_dem?{overview_dem}:{}),schema_version:'gis-workbench-run-config-v2',operation:'mesh_only',extraction_engine:'indexed_windowed_v1',run_name:'mesh-cherry-ui',analysis_crs:$('crs').value.trim(),output_root:$('output').value,cell_source,edge_subdivisions:number('subdivisions')};
 }
 function acceptedExtractionCellLimit(){
   const count=Number(meshSnapshot?.display?.cell_count??meshSnapshot?.cells?.length??0);
@@ -1432,6 +1488,7 @@ async function exportResult(){
 
 function comparisonMeshCount(){const values=[meshSnapshot?.display?.cell_count,meshSnapshot?.cell_count,meshSnapshot?.qa?.mesh_quality?.cell_count];return values.find(Number.isSafeInteger)??null;}
 function countText(value){return Number.isSafeInteger(value)?value.toLocaleString('vi-VN'):'—';}
+function comparisonReductionText(value){return Number.isFinite(value)?`${value>0?'Giảm':value<0?'Tăng':'Không đổi'} ${Math.abs(value).toLocaleString('vi-VN',{maximumFractionDigits:2})}%`:'—';}
 function comparisonCountConfig(){
   if(!meshSnapshot)throw Error('Tạo lưới trước khi đếm.');
   const baselineMode=$('comparison-mode').value||'native_raster';
@@ -1459,7 +1516,7 @@ function renderComparisonCounts(){
   const baseline=inventory?.baseline;
   $('comparison-baseline-count').textContent=countText(baseline?.count);
   const baselineLabels={
-    source_pixels_with_positive_area_intersection_with_mesh_union:'Pixel hình học raster · giao diện tích dương với ROI',
+    source_pixels_with_positive_area_intersection_with_mesh_union:'Pixel giao miền lưới · đếm hình học',
     geometric_roi_intersecting_source_pixels:'Pixel hình học · giao ROI',
     positive_area_clipped_connected_components:'Ô vuông · thành phần liên thông sau clip',
   };
@@ -1468,9 +1525,9 @@ function renderComparisonCounts(){
   const delta=inventory?.difference?.signed_mesh_minus_baseline;
   $('comparison-count-delta').textContent=Number.isSafeInteger(delta)?`${delta>0?'+':''}${delta.toLocaleString('vi-VN')}`:'—';
   const reduction=inventory?.difference?.reduction_percent;
-  $('comparison-count-reduction').textContent=Number.isFinite(reduction)?`${reduction>0?'+':''}${reduction.toLocaleString('vi-VN',{maximumFractionDigits:2})}%`:'—';
+  $('comparison-count-reduction').textContent=comparisonReductionText(reduction);
 }
-function clearComparison(){comparisonReport=null;comparisonEvaluationKey='';$('comparison-status').textContent='';$('comparison-result').hidden=true;$('comparison-download').hidden=true;window.ComparisonView?.clear?.($('comparison-visualization'));}
+function clearComparison(){comparisonReport=null;comparisonEvaluationKey='';clearComparisonFailure();$('comparison-status').textContent='';$('comparison-result').hidden=true;$('comparison-download').hidden=true;window.ComparisonView?.clear?.($('comparison-visualization'));}
 function invalidateComparisonInventory(){
   let next='';try{next=comparisonInventoryIdentity(comparisonCountConfig());}catch{}
   if(next!==comparisonCountKey){const hadInventory=Boolean(comparisonInventory);comparisonInventory=null;comparisonInventoryKey='';comparisonCountKey=next;renderComparisonCounts();if(hadInventory)$('comparison-count-status').textContent='Cấu hình đối chiếu đã đổi; hãy đếm lại để cập nhật số liệu.';}
@@ -1479,12 +1536,12 @@ function invalidateComparisonInventory(){
 function formatPhaseProgress(job,kind){
   const monitor=job?.monitor||{},progress=monitor.phase_progress||job?.phase_progress||null;
   const root=kind==='count'?'comparison-count':'comparison-evaluation',bar=$(root+'-progress'),label=$(root+'-progress-label');
-  const comparisonPhases={comparison_prepare:'Xác minh nguồn và chuẩn bị miền',prepare_domain:'Chuẩn bị hình học miền',count_target_grid:'Đếm ô vuông đối chứng',count_native_pixels:'Đếm pixel nguồn giao ROI',values_pass1:'Tổng hợp giá trị · lượt 1/2',error_pass2:'Đo sai số · lượt 2/2',measure_pass1:'Đo thuộc tính raster',comparison_publish:'Tổng hợp và lưu báo cáo'};
+  const comparisonPhases={comparison_prepare:'Xác minh nguồn và chuẩn bị miền',prepare_domain:'Chuẩn bị hình học miền',count_target_grid:'Đếm ô vuông đối chứng',count_native_pixels:'Đếm pixel giao miền lưới · theo hình học',values_pass1:'Tổng hợp giá trị · lượt 1/2',error_pass2:'Đo sai số · lượt 2/2',measure_pass1:'Đo thuộc tính raster',comparison_publish:'Tổng hợp và lưu báo cáo'};
   const elapsed=duration(monitor.elapsed_seconds),phase=comparisonPhases[progress?.phase||monitor.phase]||stageNames[progress?.phase||monitor.phase]||stageNames[job?.stage]||'Đang xử lý';
   let work='';
   if(progress&&Number.isFinite(progress.completed)&&Number.isFinite(progress.total)&&progress.total>0){
     const completed=Math.max(0,Math.min(progress.total,progress.completed));bar.max=progress.total;bar.value=completed;bar.removeAttribute('aria-valuetext');
-    const units={windows:'cửa sổ',bounding_grid_cells:'ô đã xét',source_pixels_examined:'pixel đã xét',mesh_cells:'ô lưới'};
+    const units={windows:'cửa sổ',bounding_grid_cells:'ô đã xét',source_pixels_examined:'pixel đã xử lý (không phải số ô hợp lệ)',mesh_cells:'ô lưới'};
     work=`${completed.toLocaleString('vi-VN')} / ${progress.total.toLocaleString('vi-VN')} ${units[progress.unit]||progress.unit||'đơn vị'}`;
   }else if(Number.isFinite(monitor.phase_percent)){bar.max=100;bar.value=Math.max(0,Math.min(100,monitor.phase_percent));bar.setAttribute('aria-valuetext',`${concise(bar.value)}%`);work=`${concise(monitor.phase_percent)}%`;}
   else{bar.removeAttribute('value');bar.removeAttribute('aria-valuetext');work='';}
@@ -1523,7 +1580,7 @@ function canOpenResearch(){return !busy||comparisonOwnsBusy;}
 function openQualityFromMenu(){if(!meshSnapshot||busy||qualityBusy)return;setWorkspace('mesh');$('quality-panel-host').hidden=false;$('quality-open').textContent='Thu gọn kiểm định';}
 function prepareComparison(){
   const count=comparisonMeshCount();
-  $('comparison-mesh').textContent=meshSnapshot?`Lưới mốc: ${countText(count)} ô đã chấp nhận. Mỗi ô tương ứng một graph node.`:'Tạo lưới ở bước 01–04, rồi mở lại công cụ so sánh.';$('comparison-mesh').title=meshSnapshot?.crs||'';
+  $('comparison-mesh').textContent=meshSnapshot?`Lưới hiện tại: ${countText(count)} phần tử tam giác đã chấp nhận. Đây là số ô, không phải số đỉnh hình học.`:'Tạo lưới trước, rồi mở lại công cụ so sánh.';$('comparison-mesh').title=meshSnapshot?.crs||'';
   renderComparisonCounts();
   const qualityRunning=typeof qualityBusy!=='undefined'&&qualityBusy;
   $('comparison-run').disabled=busy||qualityRunning||!meshSnapshot;
@@ -1539,7 +1596,7 @@ function syncComparisonMode(){
   $('comparison-semantics').parentElement?.parentElement?.toggleAttribute?.('hidden',estimate);
   $('comparison-units').parentElement?.parentElement?.toggleAttribute?.('hidden',estimate);
   $('comparison-mode-help').textContent=mode==='native_raster'
-    ?'Đếm pixel hình học của raster có giao diện tích dương với ROI; không đọc mask/NoData. Tác vụ này không tính sai số.'
+    ?'So sánh số phần tử: mỗi pixel có giao diện tích dương với miền lưới được đếm một lần, bất kể giá trị hoặc NoData. Không đọc band/mask, không tính sai số; không đếm toàn bộ khung TIFF ngoài miền lưới.'
     :mode==='target_grid'
       ?'Đếm các thành phần liên thông có diện tích dương sau khi cắt ô vuông mục tiêu theo ROI. Có thể đếm mà chưa chọn raster.'
       :'Ước tính số ô từ diện tích ROI và hai độ phân giải khai báo. Không đọc raster, không có số pixel thực, mask/NoData, sai số RMSE/MAE hay độ chính xác dữ liệu.';
@@ -1578,17 +1635,17 @@ function renderSpatialAllocation(panel,allocation){
   const refine=allocation.refinement;
   if(refine){
     const fraction=value=>Number.isFinite(value)?concise(value*100)+'%':'—';
-    rows.push(['Ngưỡng diện tích tham chiếu (m²)',concise(refine.reference_cell_area_m2)],['Cạnh vuông tương đương ngưỡng (m)',concise(refine.reference_equivalent_square_size_m)],['Điều kiện phân loại ô',refine.threshold||'—'],['Số node nhỏ hơn ngưỡng',refine.node_count_below_reference],['Tỷ lệ node nhỏ hơn ngưỡng',fraction(refine.node_fraction_below_reference)],['Diện tích ROI dưới ngưỡng (m²)',concise(refine.roi_area_below_reference_m2)],['Tỷ lệ diện tích ROI dưới ngưỡng',fraction(refine.roi_area_fraction_below_reference)]);
+    rows.push(['Ngưỡng diện tích tham chiếu (m²)',concise(refine.reference_cell_area_m2)],['Cạnh vuông tương đương ngưỡng (m)',concise(refine.reference_equivalent_square_size_m)],['Điều kiện phân loại ô',refine.threshold||'—'],['Số phần tử nhỏ hơn ngưỡng',refine.node_count_below_reference],['Tỷ lệ phần tử nhỏ hơn ngưỡng',fraction(refine.node_fraction_below_reference)],['Diện tích ROI dưới ngưỡng (m²)',concise(refine.roi_area_below_reference_m2)],['Tỷ lệ diện tích ROI dưới ngưỡng',fraction(refine.roi_area_fraction_below_reference)]);
   }
   detailRows(panel,rows);
   const note=document.createElement('p');note.className='field-help';note.textContent='Cạnh vuông tương đương là căn bậc hai diện tích ô. Phân vị được nội suy tuyến tính riêng trên diện tích và cạnh tương đương. Độ bám local relief và chất lượng dự đoán GNN cần đánh giá riêng.';panel.append(note);
 }
 function renderComparisonZones(panel,zones,native){
   if(!Array.isArray(zones?.rows))return;
-  const heading=document.createElement('h3');heading.textContent='Mật độ node theo vùng';panel.append(heading);
-  comparisonTable(panel,['Vùng · hàng/cột','Diện tích ROI (m²)',native?'Pixel raster gốc':'Ô vuông mục tiêu','Ô tam giác','Mật độ tam giác (node/km²)','Mật độ mốc (node/km²)'],zones.rows.slice(0,9).map(row=>[
+  const heading=document.createElement('h3');heading.textContent='Mật độ phần tử theo vùng';panel.append(heading);
+  comparisonTable(panel,['Vùng · hàng/cột','Diện tích ROI (m²)',native?'Pixel raster gốc':'Ô vuông mục tiêu','Phần tử tam giác','Mật độ tam giác (phần tử/km²)','Mật độ mốc (phần tử/km²)'],zones.rows.slice(0,9).map(row=>[
     `${row.row+1}/${row.column+1}`,concise(row.roi_area_m2),row.structured_node_count,row.mesh_node_count,concise(row.mesh_nodes_per_km2),concise(row.structured_nodes_per_km2)]));
-  const note=document.createElement('p');note.className='field-help';note.textContent='Chia khung ROI thành 3 × 3 vùng. Hàng đếm từ Nam lên Bắc, cột từ Tây sang Đông. Mỗi ô được gán một lần theo điểm đại diện trong phần giao ROI. Phân bố node theo local relief: chưa đánh giá.';panel.append(note);
+  const note=document.createElement('p');note.className='field-help';note.textContent='Chia khung ROI thành 3 × 3 vùng. Hàng đếm từ Nam lên Bắc, cột từ Tây sang Đông. Mỗi ô được gán một lần theo điểm đại diện trong phần giao ROI. Phân bố phần tử theo local relief: chưa đánh giá.';panel.append(note);
 }
 function renderComparison(report){
   if($('comparison-settings'))$('comparison-settings').open=false;
@@ -1599,32 +1656,32 @@ function renderComparison(report){
     addHeading('Quy mô ô · ước tính theo diện tích');
     const mesh=report.mesh||{},grid=report.square_grid||{},baseline=report.baseline||{};
     comparisonTable(panel,['Đại lượng','Giá trị','Trạng thái'],[
-      ['Node lưới hiện tại',mesh.node_count??mesh.cell_count,'Đếm từ mesh'],
-      ['Node lưới mục tiêu',baseline.estimated_node_count??grid.node_count??grid.cell_count,'Ước tính'],
+      ['Phần tử lưới hiện tại',mesh.node_count??mesh.cell_count,'Đếm từ mesh'],
+      ['Phần tử lưới mục tiêu',baseline.estimated_node_count??grid.node_count??grid.cell_count,'Ước tính'],
       ['Pixel nguồn giả định',baseline.estimated_source_pixel_count,'Ước tính'],
       ['Diện tích ROI (m²)',mesh.union_area_m2??report.domain_area_m2,'Hình học miền']
     ]);
     const delta=report.graph_node_delta,red=report.node_reduction_percent;
-    detailRows(panel,[['Độ phân giải nguồn giả định (m)',baseline.source_resolution_m],['Cạnh lưới mục tiêu (m)',grid.cell_size_m],['Chênh lệch node · hiện tại − mục tiêu',Number.isInteger(delta)?(delta>0?'+':'')+delta.toLocaleString('vi-VN'):'—'],['Mức giảm node · mục tiêu làm mốc',Number.isFinite(red)?concise(red)+'%':'—'],['Node graph','Một ô control volume → một node']]);
+    detailRows(panel,[['Độ phân giải nguồn giả định (m)',baseline.source_resolution_m],['Cạnh lưới mục tiêu (m)',grid.cell_size_m],['Chênh lệch phần tử · hiện tại − mục tiêu',Number.isInteger(delta)?(delta>0?'+':'')+delta.toLocaleString('vi-VN'):'—'],['Thay đổi số phần tử · mục tiêu làm mốc',comparisonReductionText(red)],['Cách đếm','Một ô là một phần tử; không phải một đỉnh hình học']]);
     const note=document.createElement('p');note.className='field-help';note.textContent='Đây chỉ là ước tính quy mô từ diện tích và độ phân giải khai báo. Không đọc raster nên không có số pixel thật, căn chỉnh lưới, mask/NoData, RMSE/MAE hoặc đánh giá độ chính xác địa hình. '+(Array.isArray(baseline.limitations)?baseline.limitations.join(' '):'');panel.append(note);
     const details=document.createElement('details'),summary=document.createElement('summary'),pre=document.createElement('pre');summary.textContent='Giả định và giới hạn ước tính';pre.textContent=JSON.stringify({baseline,square_grid:grid,method:report.method,limitations:grid.limitations},null,2);details.append(summary,pre);panel.append(details);
     renderSpatialAllocation(panel,report.spatial_allocation);
     $('comparison-download').hidden=false;return;
   }
-  addHeading('Ngân sách graph và miền đối chiếu');
+  addHeading('Số phần tử và miền đối chiếu');
   const structured=report.structured||{},unstructured=report.unstructured||{},countA=structured.node_count??structured.cell_count,countB=unstructured.node_count??unstructured.cell_count;
   const baselineMode=report.baseline?.mode||report.baseline_mode||'target_grid',native=baselineMode==='native_raster';
   const metrics=document.createElement('div');metrics.className='comparison-metrics';
   const reduction=report.node_reduction_percent;
-  for(const [value,label] of [[countA,native?'Pixel raster nguồn · giao ROI':'Node · lưới mục tiêu'],[countB,'Node · lưới hiện tại'],[Number.isFinite(reduction)?concise(reduction)+'%':'—','Mức giảm node · mốc − hiện tại / mốc']]){const box=document.createElement('div'),strong=document.createElement('strong'),span=document.createElement('span');box.className='comparison-metric';strong.textContent=typeof value==='number'?value.toLocaleString('vi-VN'):value??'—';span.textContent=label;box.append(strong,span);metrics.append(box);}panel.append(metrics);
+  for(const [value,label] of [[countA,native?'Pixel giao miền lưới · đếm hình học':'Phần tử · lưới mục tiêu'],[countB,'Phần tử tam giác · lưới hiện tại'],[comparisonReductionText(reduction),'Thay đổi số phần tử · đối chứng làm mốc']]){const box=document.createElement('div'),strong=document.createElement('strong'),span=document.createElement('span');box.className='comparison-metric';strong.textContent=typeof value==='number'?value.toLocaleString('vi-VN'):value??'—';span.textContent=label;box.append(strong,span);metrics.append(box);}panel.append(metrics);
   const delta=report.graph_node_delta;
   const extra=native?[
     ['Pixel nguồn hợp lệ trong hỗ trợ',report.baseline?.valid_source_pixel_count],
     ['Mảnh control volume sau khi cắt',report.baseline?.clipped_component_count],
     ['Độ phân giải nguồn',report.baseline?.source_resolution?`${concise(report.baseline.source_resolution.x)} × ${concise(report.baseline.source_resolution.y)} ${report.baseline.source_resolution.units||''} · ${report.baseline.source_resolution.crs||''}`:'—']
   ]:[];
-  detailRows(panel,[['Miền chung hợp lệ (m²)',concise(report.common_support_area_m2)],...extra,['Đơn vị raster',report.value_units||report.provenance?.value_units||report.metrics?.structured?.units||'Theo nguồn đã khai báo'],['Graph node','Một ô control volume → một node'],['Chênh lệch node · hiện tại − '+(native?'pixel nguồn':'lưới mục tiêu'),Number.isInteger(delta)?(delta>0?'+':'')+delta.toLocaleString('vi-VN'):'—'],['Giá trị giảm node','Dương: lưới hiện tại ít node hơn; âm: nhiều node hơn']]);
-  const boundaryNote=document.createElement('p');boundaryNote.className='field-help';boundaryNote.textContent=native?'Pixel raster đếm theo nguồn gốc, không nội suy. Mảnh control volume bị cắt được báo riêng và không được tính thay số pixel.'+(report.baseline?.identity_reference?' RMSE/MAE của tham chiếu pixel với chính nó là 0 theo định nghĩa. Độ chính xác GNN cần đánh giá riêng.':''):'Lưới mục tiêu được cắt theo miền tam giác, giữ các lỗ; các phần rời được tách thành ô riêng. Ô mới tăng số node tính toán, không tạo thêm thông tin đo từ raster.';panel.append(boundaryNote);
+  detailRows(panel,[['Miền chung hợp lệ (m²)',concise(report.common_support_area_m2)],...extra,['Đơn vị raster',report.value_units||report.provenance?.value_units||report.metrics?.structured?.units||'Theo nguồn đã khai báo'],['Cách đếm','Một ô là một phần tử; không phải một đỉnh hình học'],['Chênh lệch phần tử · tam giác − '+(native?'pixel nguồn':'lưới mục tiêu'),Number.isInteger(delta)?(delta>0?'+':'')+delta.toLocaleString('vi-VN'):'—'],['Ý nghĩa chênh lệch','Âm: tam giác ít phần tử hơn; dương: nhiều phần tử hơn'],['Công thức mức giảm','100 × (đối chứng − tam giác) / đối chứng; không suy ra mức tăng tốc hoặc độ chính xác']]);
+  const boundaryNote=document.createElement('p');boundaryNote.className='field-help';boundaryNote.textContent=native?'Số phần tử raster đếm theo hình học trên miền lưới, bao gồm NoData, không nội suy. Pixel hợp lệ dùng để tính sai số được báo riêng. Mảnh control volume bị cắt không được tính thay số pixel.'+(report.baseline?.identity_reference?' RMSE/MAE của tham chiếu pixel với chính nó là 0 theo định nghĩa. Độ chính xác GNN cần đánh giá riêng.':''):'Lưới mục tiêu được cắt theo miền tam giác, giữ các lỗ; các phần rời được tách thành ô riêng. Ô mới tăng số phần tử tính toán, không tạo thêm thông tin đo từ raster.';panel.append(boundaryNote);
   if(!native){
     const resolution=report.baseline?.source_resolution;
     detailRows(panel,[['Độ phân giải raster nguồn',resolution?`${concise(resolution.x)} × ${concise(resolution.y)} ${resolution.units||''} · ${resolution.crs||''}`:'Chưa có thông tin'],['Cạnh ô mục tiêu (m)',report.square_grid?.cell_size_m??report.baseline?.cell_size_m]]);
@@ -1654,6 +1711,34 @@ function renderComparison(report){
   $('comparison-download').hidden=false;
 }
 function finishComparisonCount(){comparisonCountJobId=null;comparisonOwnsBusy=false;comparisonCountStopRequested=false;$('comparison-count-stop').hidden=true;$('comparison-count-task').hidden=true;$('tools-close').disabled=false;for(const el of $('comparison-panel').querySelectorAll('input,select,button'))el.disabled=false;setBusy(false);prepareComparison();}
+function clearComparisonFailure(kind='evaluation'){
+  const status=$(kind==='count'?'comparison-count-status':'comparison-status');
+  const details=status.nextElementSibling;if(details?.dataset?.comparisonFailure==='true')details.remove();
+}
+function renderComparisonFailure(result={},kind='evaluation'){
+  clearComparisonFailure(kind);
+  const raw=String(result.error||''),provided=result.failure;
+  let failure=provided&&typeof provided==='object'?provided:null;
+  if(!failure){
+    // Old job records may predate structured guidance. Never show arbitrary errors as the headline.
+    if(/comparison (read pixel|window scan) limit exceeded/i.test(raw))failure={title:'Vượt giới hạn đọc raster của lượt so sánh',message:'Khối lượng đọc raster vượt giới hạn an toàn; đánh giá sai số có thể cần nhiều lượt đọc.',actions:['Chọn miền nhỏ hơn hoặc raster đã cắt theo miền cần đánh giá. Có thể dùng Đếm nhanh nếu chỉ cần số ô.']};
+    else failure={title:'Lượt so sánh chưa hoàn tất',message:'Chưa tạo được kết quả so sánh.',actions:['Mở Chi tiết kỹ thuật của lượt so sánh để kiểm tra nguyên nhân; lưới mốc vẫn được giữ nguyên.']};
+  }
+  const bounded=(value,max)=>typeof value==='string'?value.trim().slice(0,max):'';
+  const title=bounded(failure.title,100)||'Lượt so sánh chưa hoàn tất',message=bounded(failure.message,400);
+  const actions=Array.isArray(failure.actions)?failure.actions.filter(x=>typeof x==='string').slice(0,3).map(x=>bounded(x,240)).filter(Boolean):[];
+  const status=$(kind==='count'?'comparison-count-status':'comparison-status');
+  status.textContent=[title,message].filter(Boolean).join(' ');
+  if(typeof document!=='undefined'){
+    const panel=document.createElement('div');panel.dataset.comparisonFailure='true';
+    if(actions.length){const list=document.createElement('ul');for(const action of actions){const item=document.createElement('li');item.textContent=action;list.append(item);}panel.append(list);}
+    if(raw){const details=document.createElement('details'),summary=document.createElement('summary'),pre=document.createElement('pre');
+      summary.textContent='Chi tiết kỹ thuật của lượt so sánh';
+      pre.textContent=raw.slice(0,12000)+(raw.length>12000?'\n… Xem nhật ký đầy đủ của tác vụ.':'');
+      details.append(summary,pre);panel.append(details);}
+    status.after(panel);
+  }
+}
 async function requestComparisonCountStop(){
   comparisonCountStopRequested=true;$('comparison-count-stop').disabled=true;
   if(!comparisonCountJobId){$('comparison-count-status').textContent='Đã ghi nhận yêu cầu dừng; đang xác nhận lượt đếm…';return;}
@@ -1662,6 +1747,7 @@ async function requestComparisonCountStop(){
 }
 async function startComparisonCount(){
   if(busy||(typeof qualityBusy!=='undefined'&&qualityBusy))return;let payload;try{payload=comparisonCountConfig();}catch(error){$('comparison-count-status').textContent=error.message;return;}
+  clearComparisonFailure('count');
   const key=comparisonInventoryIdentity(payload);if(key!==comparisonCountKey){comparisonInventory=null;comparisonInventoryKey='';comparisonCountKey=key;renderComparisonCounts();}
   const request=++comparisonCountRequest;comparisonCountRequestKey=typeof crypto!=='undefined'&&crypto.randomUUID?crypto.randomUUID():'comparison-count-'+Date.now()+'-'+Math.random().toString(36).slice(2);payload.request_id=comparisonCountRequestKey;comparisonCountReadFailures=0;comparisonCountStopRequested=false;comparisonOwnsBusy=true;setBusy(true);$('tools-close').disabled=false;for(const el of $('comparison-panel').querySelectorAll('input,select,button'))el.disabled=true;$('comparison-count-task').hidden=false;$('comparison-count-progress').removeAttribute('value');$('comparison-count-progress-label').textContent='';$('comparison-count-stop').hidden=false;$('comparison-count-stop').disabled=false;$('comparison-count-status').textContent='Đang chuẩn bị đếm ô đối chứng…';
   try{const response=await api('/api/comparison/count',payload);if(request!==comparisonCountRequest)return;adoptComparisonCountMetadata(response,key);if(typeof response.job_id!=='string'||!response.job_id)throw Error('Chưa nhận được định danh lượt đếm.');comparisonCountJobId=response.job_id;if(comparisonCountStopRequested)await requestComparisonCountStop();await pollComparisonCount(request);}
@@ -1682,9 +1768,10 @@ async function pollComparisonCount(request){
   try{const job=await api('/api/job?id='+encodeURIComponent(comparisonCountJobId),undefined,8000);if(request!==comparisonCountRequest)return;formatPhaseProgress(job,'count');
     if(['queued','running','stopping'].includes(job.status)){comparisonCountReadFailures=0;$('comparison-count-stop').disabled=job.status==='stopping';setTimeout(()=>pollComparisonCount(request),750);return;}
     terminal=true;if(job.status==='pass'){const result=await api('/api/artifact?id='+encodeURIComponent(comparisonCountJobId)+'&name=comparison_counts',undefined,8000);if(request!==comparisonCountRequest)return;if(result.status!=='pass'||result.mesh_job_id!==meshSnapshot?.jobId||!comparisonInventory?.mesh_sha256||result.provenance?.mesh_sha256!==comparisonInventory.mesh_sha256||comparisonInventoryIdentity(comparisonCountConfig())!==comparisonCountKey)throw Error('Số đếm không còn khớp lưới, hash hoặc cấu hình hiện tại.');comparisonInventory=result;comparisonInventoryKey=comparisonCountKey;renderComparisonCounts();const valid=result.provenance?.valid_data_count;const targetGrid=result.baseline?.mode==='target_grid';$('comparison-count-status').textContent=targetGrid
-      ?`✓ Đã đếm ${countText(result.baseline?.count)} thành phần ô vuông có diện tích dương sau khi cắt theo ROI. Không đọc giá trị raster.`
-      :valid?.status==='computed'?`✓ Đã đếm xong. Pixel hình học: ${countText(result.baseline?.count)}; pixel có dữ liệu hợp lệ: ${countText(valid.value)}.`:'✓ Đã đếm xong pixel raster có giao diện tích dương với ROI. Pixel có dữ liệu hợp lệ theo mask/NoData: chưa tính.';}
-    else $('comparison-count-status').textContent=job.status==='cancelled'?'Đã dừng đếm. Số liệu đếm hoàn chỉnh trước đó được giữ nguyên.':'Đếm chưa hoàn thành: '+(job.result?.error||job.stage);
+      ?`✓ Đã đếm ${countText(result.baseline?.count)} thành phần ô vuông có diện tích dương sau khi cắt theo miền lưới hiện tại. Không đọc giá trị raster.`
+      :valid?.status==='computed'?`✓ Đã đếm ${countText(result.baseline?.count)} pixel giao miền lưới theo hình học, bất kể giá trị/NoData. Pixel có dữ liệu hợp lệ (tham khảo riêng): ${countText(valid.value)}.`:'✓ Đã đếm pixel có giao diện tích dương với miền lưới; tính cả pixel NoData vì đây là so sánh số phần tử hình học, không phải số pixel có dữ liệu hợp lệ.';}
+    else if(job.status==='cancelled')$('comparison-count-status').textContent='Đã dừng đếm. Số liệu đếm hoàn chỉnh trước đó được giữ nguyên.';
+    else renderComparisonFailure(job.result||{},'count');
     finishComparisonCount();
   }catch(error){if(request!==comparisonCountRequest)return;comparisonCountReadFailures++;
     if([400,401,403,404,410].includes(error.status)||(terminal&&comparisonCountReadFailures>=3)){$('comparison-count-status').textContent=(terminal?'Tác vụ đã kết thúc; chưa tải được số đếm. ':'Chưa đọc được lượt đếm. ')+error.message+' Số liệu hoàn chỉnh trước đó được giữ nguyên.';finishComparisonCount();return;}
@@ -1693,10 +1780,11 @@ async function pollComparisonCount(request){
 }
 async function startComparison(){
   if(busy||(typeof qualityBusy!=='undefined'&&qualityBusy))return;let payload;try{payload=comparisonConfig();}catch(error){$('comparison-status').textContent=error.message;return;}
+  clearComparisonFailure();
   const request=++comparisonRequest;comparisonRequestKey=typeof crypto!=='undefined'&&crypto.randomUUID?crypto.randomUUID():'comparison-'+Date.now()+'-'+Math.random().toString(36).slice(2);comparisonEvaluationKey=JSON.stringify(payload);comparisonReadFailures=0;comparisonStopRequested=false;comparisonProgressSamples=[];payload.request_id=comparisonRequestKey;comparisonOwnsBusy=true;setBusy(true);$('tools-close').disabled=false;for(const el of $('comparison-panel').querySelectorAll('input,select,button'))el.disabled=true;$('comparison-evaluation-task').hidden=false;$('comparison-evaluation-progress').removeAttribute('value');$('comparison-evaluation-progress-label').textContent='';$('comparison-stop').hidden=false;$('comparison-stop').disabled=false;$('comparison-status').textContent='Đang chuẩn bị đánh giá hai lưới trên miền raster chung…';
   if(payload.baseline_mode==='resolution_estimate')$('comparison-status').textContent='Đang ước tính quy mô theo diện tích và độ phân giải khai báo…';
   try{const response=await api('/api/comparison',payload);if(request!==comparisonRequest)return;if(typeof response.job_id!=='string'||!response.job_id)throw Error('Chưa nhận được định danh lượt so sánh.');comparisonJobId=response.job_id;if(comparisonStopRequested)await stopComparison();await pollComparison(request);}
-  catch(error){if(request!==comparisonRequest)return;$('comparison-status').textContent='Đang xác nhận lượt so sánh đã khởi chạy…';await recoverComparison(request,error.message);}
+  catch(error){if(request!==comparisonRequest)return;if([400,422].includes(error.status)){renderComparisonFailure({error:error.message,failure:error.failure});finishComparison();return;}$('comparison-status').textContent='Đang xác nhận lượt so sánh đã khởi chạy…';await recoverComparison(request,error.message);}
 }
 async function recoverComparison(request,reason=''){
   if(request!==comparisonRequest)return;
@@ -1715,7 +1803,8 @@ async function pollComparison(request){
     const monitor=job.monitor||{},estimate=$('comparison-mode').value==='resolution_estimate';formatPhaseProgress(job,'evaluation');$('comparison-status').textContent=job.status==='stopping'?'Đang xác nhận việc dừng tác vụ…':estimate?'Đang ước tính quy mô lưới…':'Đang đánh giá sai số raster…';
     if(['queued','running','stopping'].includes(job.status)){comparisonReadFailures=0;$('comparison-stop').disabled=job.status==='stopping';setTimeout(()=>pollComparison(request),750);return;}
     terminal=true;if(job.status==='pass'){const report=await api('/api/artifact?id='+encodeURIComponent(comparisonJobId)+'&name=comparison',undefined,8000);if(request!==comparisonRequest)return;if(JSON.stringify(comparisonConfig())!==comparisonEvaluationKey){$('comparison-status').textContent='Lượt đánh giá đã hoàn thành nhưng cấu hình hiện tại đã đổi; báo cáo cũ chưa được áp dụng.';finishComparison();return;}renderComparison(report);$('comparison-status').textContent=estimate?'✓ Đã ước tính quy mô theo diện tích và độ phân giải khai báo.':'✓ Đã so sánh hai lưới trên cùng nguồn và miền hợp lệ.';}
-    else $('comparison-status').textContent=job.status==='cancelled'?(estimate?'Đã dừng ước tính. Lưới mốc được giữ nguyên.':'Đã dừng đánh giá sai số raster. Lưới mốc được giữ nguyên.'):'Tác vụ chưa hoàn thành: '+(job.result?.error||job.stage);
+    else if(job.status==='cancelled')$('comparison-status').textContent=estimate?'Đã dừng ước tính. Lưới mốc được giữ nguyên.':'Đã dừng đánh giá sai số raster. Lưới mốc được giữ nguyên.';
+    else renderComparisonFailure(job.result||{});
     finishComparison();
   }catch(error){if(request!==comparisonRequest)return;comparisonReadFailures++;
     if([400,401,403,404,410].includes(error.status)||(terminal&&comparisonReadFailures>=3)){$('comparison-status').textContent=(terminal?'Tác vụ đã kết thúc; chưa tải được báo cáo. ':'Chưa đọc được lượt so sánh. ')+error.message+' Lưới mốc được giữ nguyên.';finishComparison();return;}
@@ -1729,6 +1818,12 @@ $('project-open').onclick=()=>{if(!busy)$('project-file').click();};
 $('project-file').onchange=()=>openProject($('project-file').files?.[0]);
 $('project-save').onclick=saveProject;$('export-run').onclick=exportResult;$('export-format').onchange=syncDocumentControls;
 $('batch-add').onclick=addBatchRaster;$('batch-run').onclick=startBatch;$('batch-cancel').onclick=cancelBatch;$('batch-export').onclick=exportBatch;
+$('apply-gnn-boundary').onclick=()=>{
+  if(busy||(typeof qualityBusy!=='undefined'&&qualityBusy)||$('gmsh-domain').value!=='shapefile')return;
+  $('boundary-preparation-enabled').checked=true;$('boundary-method').value='gnn_closed_rdp';
+  $('boundary-tolerance').value='200';$('boundary-distance').value='250';$('boundary-area-percent').value='1';
+  invalidate();mode();
+};
 $('gmsh-advanced-enabled').addEventListener('change',()=>{gmshAdvancedEnabled=$('gmsh-advanced-enabled').checked;mode();invalidate();});
 $('dem-raster').addEventListener('input',()=>{if(demPreviewKey&&demPreviewKey!==demPreviewIdentity())clearDemPreview();});
 $('dem-raster').addEventListener('change',loadDemPreview);
@@ -1848,8 +1943,9 @@ function showMeshQuality(q){
   const observed=document.createElement('details'),observedLabel=document.createElement('summary');observed.className='mesh-observed-details';observedLabel.textContent='Chỉ số hình học của lưới';observed.append(observedLabel);$('mesh-quality').append(observed);
   const rows=[['Ô / đỉnh XY duy nhất',q.cell_count+' / '+q.vertex_count],['Diện tích nhỏ nhất / lớn nhất (m²)',q.area_min_m2.toFixed(3)+' / '+q.area_max_m2.toFixed(3)],['Cạnh nhỏ nhất / lớn nhất (m)',q.edge_min_m.toFixed(3)+' / '+q.edge_max_m.toFixed(3)],['Diện tích chồng lấn (m²)',q.overlap_area_m2.toFixed(6)]];
   if(q.triangle_min_angle_deg!==null)rows.push(['Góc tam giác nhỏ nhất (°)',q.triangle_min_angle_deg.toFixed(3)],['Aspect lớn nhất · cạnh dài nhất / đường cao',q.triangle_max_aspect.toFixed(3)]);
-  if(q.domain_symmetric_difference_m2!==undefined)rows.push(['Sai lệch diện tích với ROI (m²)',q.domain_symmetric_difference_m2.toFixed(6)]);
-  if(q.domain_coverage)rows.push(['Phủ ROI',q.domain_coverage],['Số vùng / lỗ',q.component_count+' / '+q.hole_count],['Diện tích ROI (m²)',q.domain_area_m2.toFixed(3)]);
+  const meshDomainLabel=q.sizing_summary?.derived_boundary?'miền dẫn xuất':'ROI';
+  if(q.domain_symmetric_difference_m2!==undefined)rows.push(['Sai lệch diện tích với '+meshDomainLabel+' (m²)',q.domain_symmetric_difference_m2.toFixed(6)]);
+  if(q.domain_coverage)rows.push(['Phủ '+meshDomainLabel,q.domain_coverage],['Số vùng / lỗ',q.component_count+' / '+q.hole_count],['Diện tích '+meshDomainLabel+' (m²)',q.domain_area_m2.toFixed(3)]);
   detailRows(observed,rows);const technical=document.createElement('details'),label=document.createElement('summary');label.textContent='Định danh hình học';technical.append(label);detailRows(technical,[['SHA256',q.geometry_digest||'—']]);$('mesh-quality').append(technical);
 }
 function showProjectHistory(qa){
@@ -1858,8 +1954,9 @@ function showProjectHistory(qa){
   const q=history.mesh_quality||{},rows=[['Hồ sơ','Kết quả của lần tạo lưới đã lưu']];
   if(history.historical_status||history.status)rows.push(['Trạng thái đã lưu',history.historical_status||history.status]);
   if(q.cell_count!==undefined)rows.push(['Số ô đã lưu',q.cell_count]);
-  if(q.domain_coverage)rows.push(['Phủ ROI · đã lưu',q.domain_coverage]);
-  if(q.domain_symmetric_difference_m2!==undefined)rows.push(['Sai lệch diện tích ROI · đã lưu',concise(q.domain_symmetric_difference_m2)+' m²']);
+  const historicalDomain=q.sizing_summary?.derived_boundary?'miền dẫn xuất':'ROI';
+  if(q.domain_coverage)rows.push(['Phủ '+historicalDomain+' · đã lưu',q.domain_coverage]);
+  if(q.domain_symmetric_difference_m2!==undefined)rows.push(['Sai lệch diện tích '+historicalDomain+' · đã lưu',concise(q.domain_symmetric_difference_m2)+' m²']);
   if(q.sizing_summary)rows.push(...requestRows(q.sizing_summary));
   detailRows(content,rows);
 }

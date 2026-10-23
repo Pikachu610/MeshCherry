@@ -79,6 +79,7 @@ def run_mesh(path,config,progress=None):
     root=Path(config['output_root'])
     inputs=[path]
     if config.get('resolution_reference'): inputs.append(Path(config['resolution_reference']['path']))
+    if config.get('overview_dem'): inputs.append(Path(config['overview_dem']['path']))
     for key in ('raster_path',):
         if config.get(key): inputs.append(Path(config[key]))
     source=config['cell_source']
@@ -142,6 +143,16 @@ def run_mesh(path,config,progress=None):
         stage='serialization'
         observe('serialization')
         preview(output/'preview.png',cells.cells)
+        try:
+            from .run_overview import render_overview
+            available=render_overview(output,cells.cells,config,manifest.get('gmsh_generated'))
+            manifest['run_overview']=dict(status='pass' if available else 'unavailable',artifact='run-overview.png' if available else None)
+        except Cancelled:
+            raise
+        except Exception as error:
+            manifest['run_overview']=dict(status='warning',message='Không dựng được hình tổng kết; lưới đã kiểm tra vẫn được giữ.',technical_error=str(error)[:500])
+        qa_record=dict(status='pass',mesh_quality=qa,sizing_summary=sizing_summary,run_overview=manifest['run_overview'])
+        write_json(output/'qa.json',qa_record)
         if _digest(path)!=config_hash: raise ValueError('Mesh config changed during run')
         if any(_digest(Path(p))!=digest for p,digest in input_hashes.items()): raise ValueError('Mesh input changed during run')
         assert_rasters_unchanged(raster_bundles)

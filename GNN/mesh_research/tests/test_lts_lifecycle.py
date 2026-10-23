@@ -43,8 +43,10 @@ class LifecycleTests(unittest.TestCase):
             for state in busy_states + [{}]:
                 with self.subTest(state=state):
                     server = Server(**state)
-                    window = SimpleNamespace(events=SimpleNamespace(closing=Event()))
+                    window = SimpleNamespace(maximized=False,events=SimpleNamespace(
+                        closing=Event(),maximized=Event(),restored=Event()))
                     view = SimpleNamespace(
+                        settings={},
                         FileDialog=SimpleNamespace(FOLDER=1, OPEN=2, SAVE=3),
                         create_window=lambda *_args, **_kwargs: window,
                     )

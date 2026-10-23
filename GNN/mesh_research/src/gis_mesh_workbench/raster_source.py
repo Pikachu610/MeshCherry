@@ -66,7 +66,8 @@ def assert_unchanged(path, before):
 def raster_snapshots(config):
     source=config.get('cell_source', {})
     paths=[config.get('raster_path'),source.get('roi_raster_path'),source.get('dem_raster_path'),
-           config.get('resolution_reference', {}).get('path')]
+           config.get('resolution_reference', {}).get('path'),
+           config.get('overview_dem', {}).get('path')]
     return {str(Path(p)):snapshot(p) for p in paths if p}
 
 
