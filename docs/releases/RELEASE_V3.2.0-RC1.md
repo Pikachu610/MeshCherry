@@ -31,4 +31,4 @@ Original node tags are unavailable in cell-coordinate imports. Unverified SF-1
 Structured field interpolation is reported unavailable. Restored cache metrics
 are historical file data, not independently authenticated calculations.
 
-Definitions and supported scope: [Mesh quality guide](GNN/mesh_research/docs/MESH_QUALITY.md).
+Definitions and supported scope: [Mesh quality guide](../../GNN/mesh_research/docs/MESH_QUALITY.md).

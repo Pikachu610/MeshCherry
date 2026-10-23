@@ -82,5 +82,5 @@ python -m venv .venv
 .\.venv\Scripts\python.exe .\launch_meshcherry.py
 ```
 
-Các bản cũ và ghi chú tương ứng được giữ trong [Releases](https://github.com/Pikachu610/MeshCherry/releases).
+Các bản cũ được giữ trong [Releases](https://github.com/Pikachu610/MeshCherry/releases); ghi chú cũ được gom trong [kho lưu trữ](docs/releases/).
 Giữ thông báo giấy phép của font và thư viện phụ thuộc khi phân phối lại.
