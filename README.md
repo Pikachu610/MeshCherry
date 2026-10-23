@@ -1,131 +1,86 @@
-# MeshCherry — Windows desktop
+# MeshCherry 🍒
 
-## Bản tải thử mới: 3.2.0 RC14 — Cherry Horizon 🍒
+**Từ bản đồ, đến từng ô lưới.**
 
-[Tải RC14 Windows x64](https://github.com/Pikachu610/MeshCherry/releases/tag/v3.2.0-rc14)
-· [Tính năng, sửa lỗi và giới hạn kiểm chứng](RELEASE_V3.2.0-RC14.md).
+MeshCherry là phần mềm GIS desktop cho Windows: tạo lưới tam giác, xem chất lượng,
+so sánh với lưới cấu trúc và trích thuộc tính từ một hoặc nhiều raster trên cùng miền.
+Giao diện tiếng Việt, xử lý dữ liệu cục bộ, không cần cài Python để chạy bản đóng gói.
 
-RC14 thêm chế độ Nghiên cứu cho đánh giá sai số raster, bỏ các trần tổng công việc
-nhưng vẫn giữ xử lý theo cửa sổ, Dừng và bảo vệ dữ liệu. App có mục Trợ giúp về
-yêu cầu hệ thống và khuyến nghị RAM chưa chứng nhận. Không tuyên bố toàn app vô hạn:
-giới hạn hình học/bộ nhớ còn áp dụng; chưa đo so sánh PET hoàn chỉnh hoặc hiệu năng
-dữ liệu cực lớn. Bản ổn định bên dưới và các RC cũ được giữ nguyên.
+## MeshCherry 3.2.0 — Cherry Horizon
 
-## MeshCherry 3.0.0 — bản phát hành chính thức
+[Tải bản chính thức cho Windows x64](https://github.com/Pikachu610/MeshCherry/releases/tag/v3.2.0)
+· [Ghi chú phát hành](RELEASE_V3.2.0.md)
+· [Các phiên bản trước](https://github.com/Pikachu610/MeshCherry/releases)
 
-Ứng dụng desktop Windows dành cho nghiên cứu GIS: tạo lưới, kiểm tra chất lượng,
-trích thuộc tính raster, so sánh cách biểu diễn và lưu dự án để mở lại.
+## Bạn có thể làm gì?
 
-[Tải Windows x64](https://github.com/Pikachu610/MeshCherry/releases/tag/v3.0.0)
-· [Danh sách tính năng và cách dùng](RELEASE_V3.0.0.md)
-· [Hướng dẫn build](GNN/mesh_research/packaging/README.md)
+| Công cụ | Chức năng |
+| --- | --- |
+| **ROI — miền nghiên cứu** | Nhập Shapefile Polygon, biên GeoTIFF/ASC hoặc miền chữ nhật; xem trước, kiểm tra hình học, CRS và độ phân giải. |
+| **Tạo lưới tam giác** | Gmsh chia đều theo kích thước mục tiêu hoặc thích nghi theo địa hình DEM; hồ sơ SF-1 và biến thể Local relief. Quay lại chỉnh thông số, tạo lại mà không phải bắt đầu từ đầu. |
+| **Xử lý đường biên** | Tùy chọn tạo biên dẫn xuất, kiểm tra sai lệch diện tích và khoảng cách; giữ nguyên Shapefile nguồn. |
+| **Xem và kiểm định** | Pan/zoom, chọn ô, xem thuộc tính và báo cáo chất lượng; hình tổng kết DEM, trường kích thước, toàn mesh và vùng phóng to khi có dữ liệu tương ứng. |
+| **So sánh lưới** | Đối chiếu số phần tử tam giác với pixel raster gốc hoặc lưới vuông mục tiêu; hiển thị số lượng và mức giảm/tăng trước, đánh giá sai số raster khi được yêu cầu. Có mốc ước tính theo độ phân giải khi chưa có raster. |
+| **Trích thuộc tính** | Trích một hoặc nhiều GeoTIFF/ASC trên cùng lưới; trung bình theo diện tích, phân bổ tổng lượng hoặc tỷ phần lớp tùy ý nghĩa dữ liệu. Theo dõi tiến độ và Dừng tác vụ. |
+| **Rà soát bảng** | Xem bản nháp trước khi trích; đổi tên/sắp xếp/chọn cột, loại dòng, thêm cột và dòng nhập tay bổ sung; xem trước kết quả theo trang trước khi xuất. |
+| **Lưu và xuất** | Mở/lưu dự án `.mcy`; bảng CSV rộng/dài, JSON và metadata; xuất mesh JSON/MSH khi có, GeoJSON và raster GeoTIFF/ASC cho thuộc tính được hỗ trợ. |
+| **Theo dõi công việc** | Nhật ký, trạng thái và tiến độ theo tác vụ; xem cấu hình lượt chạy và kết quả đã lưu. |
+
+### Dữ liệu lớn cho nghiên cứu
+
+Trong **So sánh → Đánh giá sai số raster**, chế độ **Nghiên cứu** không đặt trần
+tổng pixel nguồn, pixel đọc cộng dồn, cặp giao hình học hoặc cửa sổ quét.
+Tác vụ vẫn đọc theo cửa sổ tối đa 65.536 pixel, kiểm tra dữ liệu và cho phép Dừng.
+Chế độ giới hạn công việc vẫn có thể chọn lại.
+
+Đây không phải toàn ứng dụng không giới hạn: lưới tam giác/lưới mục tiêu vẫn tối đa
+100.000 phần tử; SF-1, Extract, phân loại, lô hình học và cache có bảo vệ riêng.
+Thời gian và bộ nhớ phụ thuộc dữ liệu; máy có thể hết RAM hoặc dung lượng.
+
+## Bắt đầu trong vài phút
+
+1. Tải ZIP của bản 3.2.0, giải nén **toàn bộ** rồi mở `MeshCherry.exe`. Giữ `_internal` cạnh EXE.
+2. Trong **ROI**, chọn miền nghiên cứu và kiểm tra dữ liệu.
+3. Sang **Lưới**, chọn Gmsh, cấu hình chia đều hoặc DEM thích nghi rồi tạo lưới.
+4. Sang **So sánh** để xem số phần tử và, nếu cần, chạy đánh giá sai số với raster đối chiếu.
+5. Sang **Extract**, thêm raster, rà soát bảng, trích thuộc tính và xuất kết quả.
+6. Dùng **Tệp → Lưu dự án** để tiếp tục công việc ở lần mở sau.
+
+Gmsh cài riêng từ [gmsh.info](https://gmsh.info/); chọn executable và kiểm tra phiên bản
+trong ứng dụng. Tệp dữ liệu nguồn không được đưa vào kho mã GitHub này.
+
+## Yêu cầu hệ thống
+
+- Windows 10/11 **64-bit**, Microsoft Edge WebView2 Runtime, workspace có quyền ghi.
+- Không cần Python hoặc GPU rời để chạy gói desktop; tạo lưới cần Gmsh 4.x cài riêng.
+- CPU 64-bit hiện đại và SSD được khuyến nghị. RAM 8 GiB cho dữ liệu nhỏ, 16 GiB để bắt đầu, 32 GiB trở lên cho dữ liệu nặng là **gợi ý**, không phải mức tối thiểu đã chứng nhận bằng benchmark.
+- Xem **Trợ giúp → Yêu cầu hệ thống & dữ liệu lớn** trong app. EXE chưa ký số; không tắt bảo vệ Windows để chạy.
+
+## Hiểu đúng kết quả
+
+Số **phần tử tam giác** khác số **đỉnh hình học**. Khi dùng graph tại tâm ô, mỗi ô
+tương ứng một node; không dùng lẫn hai cách đếm. So sánh hình học đếm pixel/ô trên
+miền đối chiếu, độc lập với việc đánh giá giá trị và NoData của raster.
+
+RMSE/MAE/bias và các chỉ số bảo toàn/tỷ phần đo cách biểu diễn thuộc tính raster;
+không tự chứng minh độ chính xác thủy văn, routing hoặc mô hình GNN.
+SF-1 có điều kiện dữ liệu riêng được nêu trong app. Raster xuất dùng lấy mẫu tâm
+pixel, tối đa một triệu pixel và không áp dụng cho tổng lượng extensive.
+Bản nháp trước extract hiển thị cấu trúc bảng; giá trị raster chỉ có sau khi tính.
+Dòng nhập tay là bảng bổ sung, không tự tạo thêm ô lưới; hình học và số liệu tính
+toán không phải các ô Excel có thể sửa tùy ý.
+
+## Mã nguồn và giấy phép
+
+[Hướng dẫn module](GNN/mesh_research/src/gis_mesh_workbench/README.md)
+· [Hướng dẫn build Windows](GNN/mesh_research/packaging/README.md)
 · [MIT License](LICENSE)
 
-| Nhóm công cụ | Chức năng |
-| --- | --- |
-| Miền và dữ liệu | ROI shapefile Polygon `.shp/.shx/.dbf/.prj`, footprint GeoTIFF/ASC hoặc miền chữ nhật; xem trước và metadata CRS/độ phân giải. |
-| Tạo lưới | Lưới vuông/chữ nhật, Gmsh tam giác đều hoặc thích nghi theo local relief; nhập mesh JSON; hồ sơ địa hình SF-1 phục vụ thử nghiệm. |
-| Chất lượng và hiển thị | Kiểm tra hình học, độ phủ, chất lượng ô; pan/zoom, chọn ô và xem thuộc tính. |
-| Trích thuộc tính | Intensive trung bình diện tích, extensive phân bổ tổng lượng, categorical tỷ phần lớp; coverage và NoData tách riêng. |
-| So sánh | Vuông–tam giác trên cùng miền/raster; số ô, RMSE/MAE/bias hoặc bảo toàn tổng/tỷ phần lớp theo loại dữ liệu. |
-| Quản lý tác vụ | Log Gmsh, tiến độ công đoạn, thời gian đã chạy, Dừng và phục hồi; ETA khi đủ số đo. |
-| Dự án và xuất | `.mcy`, CSV/JSON, mesh JSON/MSH khi có; GeoJSON và raster hóa GeoTIFF/ASC+PRJ cho thuộc tính phù hợp. |
-
-### Bắt đầu
-
-1. Giải nén toàn bộ ZIP, mở `MeshCherry/MeshCherry.exe`; giữ `_internal` cạnh EXE.
-2. Mở `test-data/triangle-example.mcy` để xem nhanh kết quả mẫu.
-3. Chọn ROI → cấu hình lưới/Gmsh → kiểm tra và tạo lưới → xem chất lượng.
-4. Chọn raster trong tab Extract → chọn band, đơn vị, loại thuộc tính → chạy và lưu/xuất.
-
-Yêu cầu Windows x64 và WebView2; Python đã đóng gói. Cài Gmsh riêng từ
-[gmsh.info](https://gmsh.info/), chọn executable và kiểm tra phiên bản trong ứng dụng.
-EXE chưa ký số. Hồ sơ kiểm chứng/checksum đi kèm release; tương tác Windows/Explorer
-và máy sạch vẫn chờ nghiệm thu. Các chỉ số so sánh đo biểu diễn raster, chưa xác nhận
-hiệu quả mô hình thủy văn/GNN. Raster xuất lấy mẫu tâm pixel, giới hạn 1 triệu pixel;
-không raster hóa tổng lượng extensive. Xem release notes để chọn định dạng phù hợp.
-
-Nguồn, tag và gói RC11/v2.0.0 được giữ nguyên trong lịch sử phát hành.
-
-## Nền tảng mã nguồn 2.9.1
-
-Nhánh nguồn hiện tại tiếp nối bản portable v2.0.0 đã phát hành. Bản 2.9.1 bổ sung
-quy trình mesh-first, gọi Gmsh cài riêng, ROI SHP/GeoTIFF/ASC, kiểm tra chất lượng,
-extraction trên ô bất biến, so sánh lưới vuông–tam giác và hồ sơ địa hình SF-1.
-Xem [hướng dẫn hiện tại](GNN/mesh_research/src/gis_mesh_workbench/README.md) và
-[ghi chú bản nguồn 2.9.1](RELEASE_V2.9.1.md).
-
-Các sửa lỗi trong 2.9.1 tập trung vào Stop/preflight, phục hồi tác vụ theo request
-ID, metadata khi hủy comparison, cạnh ranh giới dài bằng 0 và số học ổn định.
-Hồ sơ kiểm thử được ghi trong release notes. Việc cập nhật source không thay thế
-kiểm tra trực quan cửa sổ Windows hoặc xác nhận trên máy sạch.
-
-Không dùng kết quả kiểm thử nguồn mới để suy ra EXE cũ v2.0.0 đã có chức năng mới.
-
-## Chạy bản nguồn hiện tại
-
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".\GNN\mesh_research[desktop]"
 .\.venv\Scripts\python.exe .\launch_meshcherry.py
 ```
 
-Gmsh được cài riêng và chọn trong Thiết lập Gmsh. Tệp nghiên cứu cá nhân, môi trường
-Python, kết quả chạy và Gmsh executable không thuộc source repository.
-
-Giấy phép mã nguồn: [MIT](LICENSE). Giữ các thông báo giấy phép riêng của font
-và thư viện phụ thuộc khi đóng gói.
-
-## Hướng dẫn lưu trữ cho bản portable v2.0.0
-
-Phần dưới mô tả đúng chức năng và giới hạn của bản binary v2.0.0, được giữ lại
-để người tải bản cũ có thể đối chiếu.
-
-Ứng dụng GIS chạy cục bộ trong cửa sổ riêng, giao diện đỏ–trắng, font Be Vietnam Pro offline và hướng dẫn từng bước. Không cần Python để chạy bản portable.
-
-## Tải và chạy
-
-Tải `MeshCherry-v2.0.0-windows-x64.zip` trong [Releases](https://github.com/Pikachu610/MeshCherry/releases/tag/v2.0.0), giải nén toàn bộ rồi mở **MeshCherry.exe**. Không tách EXE khỏi thư mục `_internal`.
-
-Yêu cầu: Windows x64, .NET Framework và Microsoft Edge WebView2 Evergreen Runtime. Gói chưa ký số; không tắt bảo vệ Windows để chạy. Giải nén ở thư mục có quyền ghi. Không cài Gmsh binary trong gói này.
-
-## Dữ liệu và thao tác cơ bản
-
-1. Chọn **Bắt đầu với mẫu**. Mẫu nhân tạo hai pixel 10/30 đã tích hợp.
-2. Giữ lưới 1 × 1 m, kiểm tra cấu hình rồi chạy.
-3. Bấm hai tâm ô: giá trị tương ứng 10 và 30, coverage 100%.
-4. Tải CSV/JSON hoặc sao chép đường dẫn hồ sơ.
-
-Để dùng dữ liệu riêng, chép GeoTIFF và mesh JSON vào `workspace/` cạnh EXE. Có thể chọn thư mục riêng bằng:
-`MeshCherry.exe --workspace D:\\MyMeshData`.
-Ứng dụng chỉ đọc trong thư mục được cho phép. Kết quả lưu trong `workspace/.scratch/gis-mesh-workbench/ui-runs/`. Không ghi đè raster nguồn; dữ liệu mẫu tích hợp chỉ đọc.
-
-## Phạm vi v2
-
-- Lưới vuông/chữ nhật trong projected CRS có đơn vị mét; strict/clip cho ô biên.
-- Nhập mesh-artifact-v0 JSON XY/XYZ; tính diện tích theo XY.
-- Trích intensive theo trung bình diện tích, extensive theo phân bổ bảo toàn, categorical theo tỷ lệ lớp.
-- Hiển thị cell, tâm ô, coverage, NoData, min/max/std và hồ sơ CSV/JSON.
-- Cửa sổ desktop WebView2; server chỉ trên loopback, có Host/Origin/token guard và không có JS/Python bridge mới.
-- Font tiếng Việt offline; bo góc nhất quán; tutorial và metadata dễ đọc hơn v1.
-- Tối đa 1.000 cell/run và các giới hạn workload hiện có.
-
-EXE **không** tạo mesh thích nghi từ DEM/polygon bất kỳ; không có basemap hay drag/drop. Gmsh demo chỉ chạy ở bản source khi cài Gmsh 4.15.2 bên ngoài; EXE báo thiếu chức năng rõ ràng, không tự đổi thuật toán. Chấm đỏ là tâm cell, không tự chứng minh graph/routing/GNN hợp lệ. Coverage 100% không phải độ chính xác thủy văn. Mesh research vẫn độc lập với Phase 1.
-
-## Chạy từ source / build EXE
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".\GNN\mesh_research[desktop]"
-.\.venv\Scripts\python.exe .\launch_meshcherry.py
-```
-
-Xem [hướng dẫn build](GNN/mesh_research/packaging/README.md) và requirements-v2.lock.txt. Build phát hành dùng Python 3.12.14, pywebview 6.2.1 và PyInstaller 6.22.3.
-
-## Kiểm chứng và giới hạn
-
-Riêng mốc portable v2.0.0: 97 test được tìm thấy, 96 đạt, 1 skip quyền symlink trên Windows. Frozen EXE của mốc đó tự kiểm tra tài nguyên, CLR, ô vuông 10/30 và tam giác 25/15. Cửa sổ native khởi chạy và phản hồi trên máy build; đây không phải chứng nhận trên máy sạch hay toàn bộ tương tác native. Gói portable chưa ký số. Kết quả ứng viên nguồn 2.9.1 được ghi riêng trong RELEASE_V2.9.1.md.
-
-Bản v1 được giữ trong lịch sử Git. Binary phân phối qua Release asset, không commit thư viện/binary hay dữ liệu cá nhân vào source Git.
-
-Tests tích hợp Gmsh được đánh dấu skip nếu executable cài ngoài chưa có, không được tính là đã kiểm chứng Gmsh trong EXE.
+Các bản cũ và ghi chú tương ứng được giữ trong [Releases](https://github.com/Pikachu610/MeshCherry/releases).
+Giữ thông báo giấy phép của font và thư viện phụ thuộc khi phân phối lại.
