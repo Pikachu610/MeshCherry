@@ -291,7 +291,7 @@ test('native raster comparison is explicit, uses the accepted mesh, and does not
   const t=setup();t.run("meshSnapshot={jobId:'accepted-mesh',cells:[{cell_id:'a'}]};jobId='later-extract'");
   for(const [id,value] of Object.entries({'comparison-mode':'native_raster','comparison-raster':'field.asc','comparison-band':'2','comparison-size':'50','comparison-semantics':'extensive','comparison-units':'m3'}))t.get(id).value=value;
   const config=JSON.parse(t.run('JSON.stringify(comparisonConfig())'));
-  assert.deepEqual(config,{mesh_job_id:'accepted-mesh',baseline_mode:'native_raster',raster_path:'field.asc',band:2,semantics:'extensive',value_units:'m3'});
+  assert.deepEqual(config,{mesh_job_id:'accepted-mesh',baseline_mode:'native_raster',raster_path:'field.asc',band:2,semantics:'extensive',value_units:'m3',workload_mode:'research'});
   t.get('comparison-mode').value='target_grid';t.get('comparison-size').value='0';assert.throws(()=>t.run('comparisonConfig()'),/số dương/);
   t.get('comparison-size').value='50';t.get('comparison-band').value='1.5';assert.throws(()=>t.run('comparisonConfig()'),/nguyên dương/);
 });
@@ -625,13 +625,13 @@ test('blank or invalid DEM band clears stale preview and reports an actionable e
   assert.equal(t.get('dem-preview-image').src,'blob:preview-2');assert.equal(t.context.calls.length,2);
 });
 
-test('DEM preview is hidden and its object URL released outside Step 2 or in uniform mode',async()=>{
+test('uniform permits reference DEM preview; leaving mesh configuration releases its URL',async()=>{
   const t=setup();t.get('dem-raster').value='elevation.tif';t.get('gmsh-sizing').value='relief';t.run("currentStage=2;$('mode').value='gmsh_generated';api=async()=>({image:'data:image/png;base64,iVBORw0KGgo=',crs:'EPSG:32649',band:1});");
   await t.run('loadDemPreview()');assert.equal(t.get('dem-preview').hidden,false);assert.equal(t.urls.created.length,1);
   t.get('gmsh-sizing').value='uniform';await t.run('loadDemPreview()');
-  assert.equal(t.get('dem-preview').hidden,true);assert.deepEqual(t.urls.revoked,['blob:preview-1']);
+  assert.equal(t.get('dem-preview').hidden,false);assert.equal(t.get('dem-preview-image').src,'blob:preview-2');assert.deepEqual(t.urls.revoked,['blob:preview-1']);
   t.get('gmsh-sizing').value='relief';t.run('currentStage=2');await t.run('loadDemPreview()');t.run('currentStage=1');await t.run('loadDemPreview()');
-  assert.equal(t.get('dem-preview').hidden,true);assert.deepEqual(t.urls.revoked,['blob:preview-1','blob:preview-2']);
+  assert.equal(t.get('dem-preview').hidden,true);assert.deepEqual(t.urls.revoked,['blob:preview-1','blob:preview-2','blob:preview-3']);
 });
 
 test('out-of-range extract band has a readable Vietnamese message',()=>{
@@ -883,11 +883,14 @@ test('lost run with unavailable recovery stays locked',async()=>{
   const t=setup();t.run("preflightId='ok';api=async()=>{throw Error('offline')}");await t.run('startRun()');assert.equal(t.run('busy'),true);assert.equal(t.timers.length,1);
 });
 
-test('uniform hides relief fields and emits no stale DEM/radius/minimum',()=>{
+test('uniform hides relief fields and retains only optional overview DEM reference',()=>{
   const t=setup();for(const [id,v] of Object.entries({mode:'gmsh_generated','gmsh-domain':'shapefile','gmsh-sizing':'uniform','boundary-path':'roi.shp','gmsh-exe':'gmsh.exe','max-cells':'1000','h-max':'250','h-min':'bad','relief-radius':'bad',subdivisions:'8'}))t.get(id).value=v;
-  t.run('mode();cfg=config()');assert.equal(t.get('h-min-control').hidden,true);assert.equal(t.get('relief-controls').hidden,true);assert.equal(t.get('dem-options').hidden,true);
+  t.get('dem-raster').value='reference-dem.tif';t.get('dem-band').value='2';
+  t.run('mode();cfg=config()');assert.equal(t.get('h-min-control').hidden,true);assert.equal(t.get('relief-controls').hidden,true);assert.equal(t.get('dem-options').hidden,false);
   assert.equal(t.run('cfg.cell_source.h_min_m'),250);assert.equal(t.run('cfg.cell_source.h_max_m'),250);
   assert.equal(t.run("'relief_radius_m' in cfg.cell_source"),false);assert.equal(t.run("'extent' in cfg.cell_source"),false);
+  assert.equal(t.run("'dem_raster_path' in cfg.cell_source"),false);assert.equal(t.run("'dem_band' in cfg.cell_source"),false);
+  assert.deepEqual(JSON.parse(t.run('JSON.stringify(cfg.overview_dem)')),{path:'reference-dem.tif',band:2});
   assert.equal(t.get('subdivisions').hidden,true);assert.match(t.get('subdivisions-help').textContent,/cố định 8/);
 });
 

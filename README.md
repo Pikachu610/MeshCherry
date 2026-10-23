@@ -1,16 +1,15 @@
 # MeshCherry — Windows desktop
 
-## Bản tải thử mới: 3.2.0 RC13
+## Bản tải thử mới: 3.2.0 RC14 — Cherry Horizon 🍒
 
-[Tải RC13 Windows x64](https://github.com/Pikachu610/MeshCherry/releases/tag/v3.2.0-rc13)
-· [Tính năng, sửa lỗi và giới hạn kiểm chứng](RELEASE_V3.2.0-RC13.md).
+[Tải RC14 Windows x64](https://github.com/Pikachu610/MeshCherry/releases/tag/v3.2.0-rc14)
+· [Tính năng, sửa lỗi và giới hạn kiểm chứng](RELEASE_V3.2.0-RC14.md).
 
-RC13 sửa DEM tham chiếu khi chia đều và căn bốn khung hình tổng kết;
-giữ riêng so sánh số phần tử hình học với đánh giá sai số raster.
-Đếm ô đối chứng đã có lượt RC13 hoàn thành. Đánh giá sai số raster lớn vẫn có thể
-bị chặn do hạn mức tổng khối lượng đọc; đây là tác vụ riêng với đếm số phần tử.
-Không chạy lại bộ kiểm thử chức năng cho RC13 theo yêu cầu người dùng;
-đây chưa phải bản ổn định dài hạn. Bản ổn định bên dưới được giữ nguyên.
+RC14 thêm chế độ Nghiên cứu cho đánh giá sai số raster, bỏ các trần tổng công việc
+nhưng vẫn giữ xử lý theo cửa sổ, Dừng và bảo vệ dữ liệu. App có mục Trợ giúp về
+yêu cầu hệ thống và khuyến nghị RAM chưa chứng nhận. Không tuyên bố toàn app vô hạn:
+giới hạn hình học/bộ nhớ còn áp dụng; chưa đo so sánh PET hoàn chỉnh hoặc hiệu năng
+dữ liệu cực lớn. Bản ổn định bên dưới và các RC cũ được giữ nguyên.
 
 ## MeshCherry 3.0.0 — bản phát hành chính thức
 

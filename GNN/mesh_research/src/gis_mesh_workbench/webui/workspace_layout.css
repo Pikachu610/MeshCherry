@@ -1224,3 +1224,11 @@ body[data-workspace="extract"] #batch-queue {
   body[data-workspace="roi"] #input-preview { margin-top: 0; }
   body[data-workspace="roi"] #input-preview-image { max-height: 340px; }
 }
+/* Capacity guidance is explicit content, not hover-only advice. */
+.comparison-capacity-options{border:1px solid var(--line);border-radius:12px;padding:12px 16px;margin:14px 0;background:#fff}
+.comparison-capacity-options label{margin-top:0}
+.comparison-capacity-options ul{padding-left:20px;margin:12px 0 0;line-height:1.55;color:var(--ink)}
+#system-requirements{width:min(980px,94vw);line-height:1.55}
+#system-requirements h2{margin:0 12px 0 0}
+#system-requirements .help-cards li{color:var(--ink);margin:5px 0}
+#system-requirements a{color:#8b183e}

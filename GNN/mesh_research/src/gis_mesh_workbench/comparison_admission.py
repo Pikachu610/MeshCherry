@@ -3,8 +3,11 @@
 This counts I/O work, not valid pixels. Masks and NoData cannot reduce a read
 window and are deliberately not inspected. Cross-CRS culling stays disabled.
 """
+import math
+
 from .indexed_extraction import MAX_WINDOWS, metadata, window_candidates, windows
 from .job_control import checkpoint, observe
+from .comparison_policy import exceeds, validate_workload_mode
 
 
 class ComparisonAdmissionError(ValueError):
@@ -15,14 +18,47 @@ class ComparisonAdmissionError(ValueError):
         self.estimate = estimate
 
 
-def estimate_read_workload(src, target, tree, cell_count, *, band, semantics, cap):
-    """Count the exact selected read windows before any raster values are read.
+def metadata_workload_advisory(src, target, *, band, semantics, cap):
+    """O(1) dimensions/block-shape advice, without values, geometry or scanning.
+
+    Every pixel can be read once per pass. Culling can only lower that bound;
+    it is not presented as an exact selected-read count. Regular GDAL blocks
+    and the production window subdivision give the per-pass scan denominator.
+    """
+    checkpoint()
+    if semantics not in {'intensive', 'extensive', 'categorical'}:
+        raise ValueError('declared comparison semantics required')
+    metadata(src, band, cap)
+    passes = 2 if semantics == 'intensive' else 1
+    side = max(1, math.isqrt(cap['max_window_pixels']))
+    block_height, block_width = src.block_shapes[band-1]
+    def chunks(length, block):
+        full, remainder = divmod(length, block)
+        return full * ((block+side-1)//side) + ((remainder+side-1)//side)
+    scan_windows = chunks(src.width, block_width) * chunks(src.height, block_height)
+    checkpoint()
+    return dict(pass_count=passes, windows_scanned_per_pass=scan_windows,
+        windows_read_per_pass=None, pixels_read_per_pass=None,
+        aggregate_windows_scanned=scan_windows*passes,
+        aggregate_windows_read=None, aggregate_pixels_read=None,
+        aggregate_pixels_read_upper_bound=int(src.width*src.height)*passes,
+        complete=False, estimate_kind='metadata_upper_bound',
+        scope='whole comparison job; raster dimensions upper bound includes every intensive pass',
+        window_culling='affine_cell_index' if src.crs == target else 'disabled_cross_crs_conservative')
+
+
+def estimate_read_workload(src, target, tree, cell_count, *, band, semantics, cap,
+                           workload_mode='bounded'):
+    """Count bounded-mode windows, or give O(1) research-mode metadata advice.
 
     A rejected estimate may be an early lower bound: scanning stops as soon as
     a ceiling is proved exceeded. Accepted counts equal runtime window counts
     for immutable inputs. Pixel/cell pairs and class entries remain runtime
     guards, since their exact costs require value/geometry evaluation.
     """
+    validate_workload_mode(workload_mode)
+    if workload_mode == 'research':
+        return metadata_workload_advisory(src, target, band=band, semantics=semantics, cap=cap)
     if semantics not in {'intensive', 'extensive', 'categorical'}:
         raise ValueError('declared comparison semantics required')
     metadata(src, band, cap)
@@ -47,7 +83,7 @@ def estimate_read_workload(src, target, tree, cell_count, *, band, semantics, ca
             result['pixels_read_per_pass'] += int(window.width * window.height)
             result['aggregate_windows_read'] = result['windows_read_per_pass'] * pass_count
             result['aggregate_pixels_read'] = result['pixels_read_per_pass'] * pass_count
-            if result['aggregate_pixels_read'] > cap['max_pixels_read']:
+            if exceeds(result['aggregate_pixels_read'], cap['max_pixels_read']):
                 raise ComparisonAdmissionError('comparison read pixel limit exceeded before evaluation', result)
     checkpoint()
     result['complete'] = True

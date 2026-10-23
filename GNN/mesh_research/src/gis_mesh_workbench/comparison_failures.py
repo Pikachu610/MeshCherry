@@ -11,7 +11,8 @@ def describe_comparison_failure(error) -> dict:
         code = 'comparison_read_limit'
         title = 'Vượt giới hạn đọc raster của lượt so sánh'
         message = 'Khối lượng đọc raster vượt giới hạn an toàn; đánh giá sai số có thể cần nhiều lượt đọc.'
-        actions = ['Chọn miền nhỏ hơn hoặc tạo một raster đã cắt theo miền cần đánh giá rồi chạy lại.',
+        actions = ['Chọn Nghiên cứu dữ liệu lớn trong phần Đánh giá sai số để không áp dụng trần tổng lượt đọc; xem hướng dẫn tài nguyên trước khi chạy.',
+                   'Hoặc chọn miền nhỏ hơn hoặc tạo một raster đã cắt theo miền cần đánh giá rồi chạy lại.',
                    'Có thể dùng Đếm nhanh để xem số ô mà không chạy đánh giá sai số.']
     elif 'source pixel limit exceeded' in text:
         code = 'comparison_source_limit'

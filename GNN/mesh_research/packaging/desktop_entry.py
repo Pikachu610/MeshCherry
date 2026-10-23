@@ -76,6 +76,7 @@ def self_test(report, gmsh_path=None, boundary_path=None):
     from gis_mesh_workbench.pixel_inventory import supports_hierarchy, hierarchical_count
     from gis_mesh_workbench.comparison_admission import estimate_read_workload, ComparisonAdmissionError
     from gis_mesh_workbench.comparison_failures import describe_comparison_failure
+    from gis_mesh_workbench.comparison_policy import comparison_limits
     from gis_mesh_workbench.indexed_extraction import limits
     from gis_mesh_workbench.raster_source import open_raster
     from gis_mesh_workbench.spatial import metric_crs
@@ -102,6 +103,15 @@ def self_test(report, gmsh_path=None, boundary_path=None):
                 raise RuntimeError('Frozen comparison failure guidance unavailable')
         else:
             raise RuntimeError('Frozen comparison admitted an over-budget job')
+        research_cap=comparison_limits('research',limits({'max_pixels_read':3}))
+        research=estimate_read_workload(source,target,tree,len(triangle.cells),
+            band=1,semantics='intensive',cap=research_cap,workload_mode='research')
+        if (research_cap['max_pixels_read'] is not None
+                or research['estimate_kind']!='metadata_upper_bound'
+                or research['aggregate_pixels_read_upper_bound']!=4):
+            raise RuntimeError('Frozen research comparison policy differs')
+        checks['research_comparison_policy']=dict(status='pass',
+            total_read_ceiling=None,read_upper_bound=4,max_window_pixels=research_cap['max_window_pixels'])
     checks['pixel_inventory_and_admission']=dict(status='pass',geometric_pixels=count,
         intensive_read_pixels=4,rejected_cap=3,failure_guidance=True)
     for name, cells, expected in (('grid',grid,[10,30]),('triangles',triangle,[25,15])):

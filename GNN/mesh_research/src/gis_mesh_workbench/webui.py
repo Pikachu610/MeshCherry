@@ -395,9 +395,15 @@ class WorkbenchServer(ThreadingHTTPServer):
             required|={'raster_path','band','semantics','value_units'}
             if baseline_mode=='target_grid':required.add('cell_size_m')
         allowed=required|{'request_id','baseline_mode'}
+        if baseline_mode!='resolution_estimate':allowed.add('workload_mode')
         if baseline_mode=='native_raster':allowed.add('cell_size_m')
         if required-set(data) or set(data)-allowed:
             raise ValueError('Thiếu trường bắt buộc hoặc có trường không phù hợp với cách so sánh')
+        if baseline_mode!='resolution_estimate':
+            workload_mode=data.get('workload_mode','bounded')
+            if not isinstance(workload_mode,str) or workload_mode not in {'bounded','research'}:
+                raise ValueError('Chọn chế độ tiêu chuẩn hoặc nghiên cứu dữ liệu lớn')
+            data={**data,'workload_mode':workload_mode}
         import math
         import hashlib
         import re
@@ -443,12 +449,13 @@ class WorkbenchServer(ThreadingHTTPServer):
                 for file in raster_bundle_paths(raster): self.permitted(file)
             analysis_crs=metric_crs(mesh_data['crs_wkt']).to_wkt()
             if raster is not None:
-                # Metadata/window admission precedes job creation, partitions and
-                # raster band reads. The worker repeats this and keeps runtime caps.
+                # Research preflight is metadata-only: no full window traversal
+                # or STRtree construction while holding the session lock.
                 from .comparison import preflight_comparison
                 with authorized_reads(self.permitted):
                     preflight_comparison(cells,raster,analysis_crs=analysis_crs,
-                        band=data['band'],semantics=data['semantics'],mesh_data=mesh_data)
+                        band=data['band'],semantics=data['semantics'],mesh_data=mesh_data,
+                        workload_mode=data['workload_mode'])
             config={**copy.deepcopy(data),'baseline_mode':baseline_mode,'analysis_crs':analysis_crs,
                     'cells_path':str(cells),'edge_subdivisions':8}
             if raster is not None:config['raster_path']=str(raster)
@@ -477,7 +484,8 @@ class WorkbenchServer(ThreadingHTTPServer):
                         else:
                             options=dict(analysis_crs=analysis_crs,cell_size_m=config.get('cell_size_m'),
                                 band=config['band'],semantics=config['semantics'],
-                                value_units=config['value_units'],edge_subdivisions=8)
+                                value_units=config['value_units'],edge_subdivisions=8,
+                                workload_mode=config['workload_mode'])
                             if baseline_mode=='native_raster':options['baseline_mode']=baseline_mode
                             report=compare_mesh(cells,raster,**options)
                             visualization=report.get('visualization')

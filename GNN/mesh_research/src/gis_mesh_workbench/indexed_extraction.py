@@ -112,7 +112,8 @@ def metadata(src, band, cap):
         raise ValueError('finite nonsingular raster affine required')
     if np.issubdtype(np.dtype(src.dtypes[band-1]),np.complexfloating):
         raise ValueError('complex rasters unsupported')
-    if src.width*src.height>cap['max_source_pixels']: raise ValueError('source pixel limit exceeded')
+    if cap['max_source_pixels'] is not None and src.width*src.height>cap['max_source_pixels']:
+        raise ValueError('source pixel limit exceeded')
 
 
 def windows(src, band, cap):

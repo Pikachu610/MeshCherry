@@ -1604,6 +1604,7 @@ function syncComparisonMode(){
   $('comparison-run').textContent=estimate?'Ước tính quy mô lưới':'Đánh giá sai số raster';
   $('comparison-evaluation-title').textContent=estimate?'Ước tính quy mô lưới':'Đánh giá sai số raster';
   $('comparison-evaluation-help').textContent=estimate?'Ước tính theo diện tích ROI và độ phân giải khai báo; không cần raster.':'Tính sai số trên các giá trị raster. Chỉ chạy khi bạn yêu cầu.';
+  if($('comparison-capacity-options'))$('comparison-capacity-options').hidden=estimate;
   $('comparison-count-run').hidden=estimate;
   $('comparison-evaluation-progress').setAttribute('aria-label',estimate?'Tiến độ ước tính quy mô':'Tiến độ đánh giá sai số raster');
   $('comparison-stop').textContent=estimate?'Dừng ước tính':'Dừng đánh giá';
@@ -1622,9 +1623,25 @@ function comparisonConfig(){
   const band=number('comparison-band'),path=$('comparison-raster').value.trim(),units=$('comparison-units').value.trim();
   if(band<=0||!Number.isInteger(band))throw Error('Band phải là số nguyên dương.');
   if(!path)throw Error('Chọn raster đối chiếu.');if(!units)throw Error('Khai báo đơn vị của raster đối chiếu.');
-  return {...payload,raster_path:path,band,semantics:$('comparison-semantics').value,value_units:units};
+  const workloadMode=$('comparison-workload-mode')?.value||'research';
+  if(!['bounded','research'].includes(workloadMode))throw Error('Chọn chế độ khối lượng xử lý hợp lệ.');
+  return {...payload,raster_path:path,band,semantics:$('comparison-semantics').value,value_units:units,workload_mode:workloadMode};
 }
 function comparisonTable(panel,headers,rows){const table=document.createElement('table');table.className='comparison-table';const head=document.createElement('thead'),header=document.createElement('tr'),body=document.createElement('tbody');for(const text of headers){const cell=document.createElement('th');cell.setAttribute('scope','col');cell.textContent=text;header.append(cell);}head.append(header);for(const row of rows){const tr=document.createElement('tr');row.forEach((value,index)=>{const td=document.createElement(index?'td':'th');if(!index)td.setAttribute('scope','row');td.textContent=typeof value==='number'?(Number.isInteger(value)?value.toLocaleString('vi-VN'):concise(value)):value??'—';tr.append(td);});body.append(tr);}table.append(head,body);panel.append(table);}
+function renderComparisonCapacity(panel,workload){
+  if(!workload)return;
+  const mode=workload.policy?.mode||workload.workload_mode||'bounded';
+  const rows=[['Chế độ thực thi',mode==='research'?'Nghiên cứu · dữ liệu lớn':'Có giới hạn công việc']];
+  const limits=workload.hard_limits||{};
+  for(const [key,label] of [['max_source_pixels','Pixel toàn nguồn'],['max_pixels_read','Pixel đọc cộng dồn'],['max_candidate_pairs','Cặp giao hình học']]){
+    if(Object.hasOwn(limits,key))rows.push([label,limits[key]===null?'Không đặt trần số lượng':countText(limits[key])]);
+  }
+  if(Number.isFinite(limits.max_window_pixels))rows.push(['Pixel mỗi cửa sổ',countText(limits.max_window_pixels)]);
+  if(Number.isFinite(workload.max_cells))rows.push(['Phần tử lưới / ô mục tiêu tối đa',countText(workload.max_cells)]);
+  if(Number.isFinite(workload.max_class_entries))rows.push(['Mục tích lũy phân loại tối đa',countText(workload.max_class_entries)]);
+  const details=document.createElement('details'),summary=document.createElement('summary');
+  summary.textContent='Chế độ và bảo vệ tài nguyên của lượt chạy';details.append(summary);detailRows(details,rows);panel.append(details);
+}
 function renderSpatialAllocation(panel,allocation){
   if(!allocation)return;
   const heading=document.createElement('h3');heading.textContent='Phân bố diện tích ô · kiểm tra kích thước hình học';panel.append(heading);
@@ -1669,6 +1686,7 @@ function renderComparison(report){
     $('comparison-download').hidden=false;return;
   }
   addHeading('Số phần tử và miền đối chiếu');
+  renderComparisonCapacity(panel,report.workload);
   const structured=report.structured||{},unstructured=report.unstructured||{},countA=structured.node_count??structured.cell_count,countB=unstructured.node_count??unstructured.cell_count;
   const baselineMode=report.baseline?.mode||report.baseline_mode||'target_grid',native=baselineMode==='native_raster';
   const metrics=document.createElement('div');metrics.className='comparison-metrics';
@@ -1836,6 +1854,7 @@ $('tool-variation').onclick=openVariationFromTools;
 $('comparison-count-run').onclick=startComparisonCount;$('comparison-count-stop').onclick=requestComparisonCountStop;$('comparison-run').onclick=startComparison;$('comparison-stop').onclick=stopComparison;$('comparison-download').onclick=downloadComparison;
 for(const id of ['comparison-raster','comparison-size'])$(id).addEventListener('input',invalidateComparisonInventory);
 for(const id of ['comparison-band','comparison-source-resolution','comparison-semantics','comparison-units'])$(id).addEventListener('input',clearComparison);
+$('comparison-workload-mode').addEventListener('change',clearComparison);
 $('comparison-mode').addEventListener('change',()=>{syncComparisonMode();invalidateComparisonInventory();});
 $('refresh-input-preview').onclick=loadInputPreview;
 $('refresh-dem-preview').onclick=loadDemPreview;
@@ -1975,6 +1994,8 @@ for(const id of ['extract-raster','extract-band','extract-semantics','extract-un
 
 $('try-sample').onclick=()=>useSample().catch(error=>toast(error.message));
 $('tutorial-help').onclick=()=>{if(busy)return;if(tutorialActive){coach.start();refreshCoach();}else $('welcome').showModal();};
+$('system-requirements-open').onclick=()=>$('system-requirements').showModal();
+$('system-requirements-close').onclick=()=>$('system-requirements').close();
 $('welcome-start').onclick=()=>{$('welcome').close();$('tutorial-finish').hidden=false;useSample().catch(error=>toast(error.message));};
 $('welcome-skip').onclick=async()=>{try{await finishTutorial();$('welcome').close();}catch(error){toast(error.message);}};
 $('tutorial-finish').onclick=()=>finishTutorial().then(()=>toast('Bạn đã hoàn thành! Chọn Bắt đầu lượt khác để dùng dữ liệu của mình.')).catch(error=>toast(error.message));

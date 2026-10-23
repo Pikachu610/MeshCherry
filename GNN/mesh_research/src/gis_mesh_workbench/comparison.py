@@ -28,11 +28,12 @@ from .mesh_workflow import read_frozen
 from .raster_source import assert_unchanged, open_raster, snapshot
 from .spatial import metric_crs
 from .workload_limits import MAX_MESH_CELLS
-from .comparison_admission import estimate_read_workload
+from .comparison_admission import estimate_read_workload, metadata_workload_advisory
+from .comparison_policy import comparison_limits, exceeds, validate_workload_mode
 
 
 def preflight_comparison(cells_path, raster_path, *, analysis_crs, band=1,
-                         semantics='intensive', mesh_data=None):
+                         semantics='intensive', mesh_data=None, workload_mode='bounded'):
     """Check aggregate window budgets without union, partitioning or band reads.
 
     The API may call this before enqueue. compare_mesh repeats the same check
@@ -41,6 +42,8 @@ def preflight_comparison(cells_path, raster_path, *, analysis_crs, band=1,
     """
     from .adapters import _json
     from .workload_limits import MAX_MESH_BYTES
+    validate_workload_mode(workload_mode)
+    checkpoint()
     target = metric_crs(analysis_crs)
     if mesh_data is None:
         if Path(cells_path).stat().st_size > MAX_MESH_BYTES:
@@ -55,6 +58,12 @@ def preflight_comparison(cells_path, raster_path, *, analysis_crs, band=1,
         raise ValueError('Frozen cell limit')
     if any(row.get('kind') != 'triangle' for row in rows):
         raise ValueError('comparison requires an accepted triangular mesh')
+    if workload_mode == 'research':
+        # No window traversal, union or STRtree while the API holds its lock.
+        # Full frozen-mesh validation remains in the cancellable worker.
+        with open_raster(Path(raster_path)) as src:
+            return metadata_workload_advisory(src, target, band=band, semantics=semantics,
+                cap=comparison_limits(workload_mode, limits()))
     # This estimate is not a geometry acceptance gate. Full frozen hashes,
     # overlap QA and identity checks remain in compare_mesh, outside API locks.
     triangles = []
@@ -241,16 +250,18 @@ def _zone_node_counts(polygons, layout):
 def compare_mesh(cells_path, raster_path, *, analysis_crs, cell_size_m=None,
                  baseline_mode='target_grid', band=1, semantics='intensive',
                  value_units='', edge_subdivisions=8, _kernel='auto',
-                 _geometry_cache_bytes=16*1024*1024):
+                 _geometry_cache_bytes=16*1024*1024, workload_mode='bounded'):
     """Compare unchanged frozen triangles with a newly clipped square partition.
 
     Intensive errors integrate squared/absolute differences on pixel-cell
     intersections. They are NOT errors of a pixel-averaged backprojection,
     which can hide subpixel differences. Extensive values are source-pixel
     totals; categorical output checks conservation and dominant-class spatial loss.
-    Existing indexed read/pair/class ceilings and cooperative cancellation apply.
+    Research removes cumulative raster-work ceilings, while per-window/batch,
+    mesh/class/cache bounds and cooperative cancellation remain in force.
     """
     observe('comparison_prepare')
+    validate_workload_mode(workload_mode)
     target = metric_crs(analysis_crs)
     if baseline_mode not in {'target_grid', 'native_raster'}:
         raise ValueError('comparison baseline mode must be target_grid or native_raster')
@@ -275,11 +286,12 @@ def compare_mesh(cells_path, raster_path, *, analysis_crs, cell_size_m=None,
         raise ValueError('comparison requires an accepted triangular mesh')
     triangles = _cells(frozen.cells)
     checkpoint()
-    cap = limits()
+    cap = comparison_limits(workload_mode, limits())
+    max_windows = MAX_WINDOWS if workload_mode == 'bounded' else None
     admission_tree = STRtree(triangles)
     with open_raster(raster_path) as src:
         admission = estimate_read_workload(src, target, admission_tree, len(triangles),
-            band=band, semantics=semantics, cap=cap)
+            band=band, semantics=semantics, cap=cap, workload_mode=workload_mode)
     domain = unary_union(triangles)
     checkpoint()
     if baseline_mode == 'target_grid':
@@ -358,7 +370,7 @@ def compare_mesh(cells_path, raster_path, *, analysis_crs, cell_size_m=None,
             for window_index, window in enumerate(windows(src, band, cap)):
                 counters['windows_scanned'] += 1
                 aggregate['windows_scanned'] += 1
-                if aggregate['windows_scanned'] > MAX_WINDOWS:
+                if exceeds(aggregate['windows_scanned'], max_windows):
                     raise ValueError('comparison window scan limit exceeded')
                 if not len(window_candidates(src, target, trees['unstructured'], window, len(triangles))):
                     observe(phase, counters['windows_scanned'], total_windows,
@@ -367,7 +379,7 @@ def compare_mesh(cells_path, raster_path, *, analysis_crs, cell_size_m=None,
                 count = int(window.width*window.height)
                 counters['pixels_read'] += count
                 aggregate['pixels_read'] += count
-                if aggregate['pixels_read'] > cap['max_pixels_read']:
+                if exceeds(aggregate['pixels_read'], cap['max_pixels_read']):
                     raise ValueError('comparison read pixel limit exceeded')
                 counters['windows_read'] += 1
                 aggregate['windows_read'] += 1
@@ -414,7 +426,7 @@ def compare_mesh(cells_path, raster_path, *, analysis_crs, cell_size_m=None,
                     batch_candidates = sum(candidate_data.values())
                     counters['candidate_pairs'] += batch_candidates
                     aggregate['candidate_pairs'] += batch_candidates
-                    if aggregate['candidate_pairs'] > cap['max_candidate_pairs']:
+                    if exceeds(aggregate['candidate_pairs'], cap['max_candidate_pairs']):
                         raise ValueError('comparison candidate pair limit exceeded')
 
                     if baseline_mode == 'native_raster' and pass_index == 0:
@@ -594,7 +606,8 @@ def compare_mesh(cells_path, raster_path, *, analysis_crs, cell_size_m=None,
             source_crs_wkt=source_crs, analysis_crs_wkt=target.to_wkt(), affine=affine, shape=shape,
             band=band, edge_subdivisions=edge_subdivisions, value_units=value_units,
             raster_resampling='none', area_model='projected planar; cross-CRS edges approximated'),
-        workload=dict(hard_limits=cap, max_cells=MAX_MESH_CELLS, admission=admission,
+        workload=dict(workload_mode=workload_mode, hard_limits=cap,
+                      max_windows_scanned=max_windows, max_cells=MAX_MESH_CELLS, admission=admission,
                       geometry_kernel=selected_kernel,
                       kernel_selection='bounded benchmark envelope; scalar fallback outside it' if _kernel=='auto' else 'explicit diagnostic override',
                       max_class_entries=MAX_CLASS_ENTRIES, passes=passes,
